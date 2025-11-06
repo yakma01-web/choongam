@@ -26,25 +26,7 @@ async function login() {
     }
 }
 
-// 회원가입
-async function register() {
-    const username = document.getElementById('registerUsername').value;
-    const password = document.getElementById('registerPassword').value;
-    const name = document.getElementById('registerName').value;
-
-    if (!username || !password || !name) {
-        alert('모든 항목을 입력해주세요.');
-        return;
-    }
-
-    try {
-        const response = await axios.post('/api/auth/register', { username, password, name });
-        alert('회원가입이 완료되었습니다. 로그인해주세요.');
-        showLogin();
-    } catch (error) {
-        alert(error.response?.data?.error || '회원가입에 실패했습니다.');
-    }
-}
+// 회원가입 기능 제거됨 - 학번으로 계정이 자동 생성되어 있습니다.
 
 // 로그아웃
 function logout() {
@@ -54,16 +36,7 @@ function logout() {
     document.getElementById('loginScreen').classList.remove('hidden');
 }
 
-// 화면 전환
-function showRegister() {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('registerScreen').classList.remove('hidden');
-}
-
-function showLogin() {
-    document.getElementById('registerScreen').classList.add('hidden');
-    document.getElementById('loginScreen').classList.remove('hidden');
-}
+// 화면 전환 함수 제거됨
 
 function showMainScreen() {
     document.getElementById('loginScreen').classList.add('hidden');

@@ -552,53 +552,25 @@ app.get('/student', (c) => {
                 <h2 class="text-3xl font-bold text-center text-indigo-900 mb-6">
                     <i class="fas fa-user-graduate mr-2"></i>학생 로그인
                 </h2>
+                <p class="text-center text-gray-600 mb-6">
+                    학번으로 로그인하세요 (예: 10101)<br/>
+                    초기 비밀번호: 1111
+                </p>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-gray-700 font-semibold mb-2">아이디</label>
-                        <input type="text" id="loginUsername" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <label class="block text-gray-700 font-semibold mb-2">학번</label>
+                        <input type="text" id="loginUsername" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="예: 10101 (1학년 1반 1번)">
                     </div>
                     <div>
                         <label class="block text-gray-700 font-semibold mb-2">비밀번호</label>
-                        <input type="password" id="loginPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="password" id="loginPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="1111">
                     </div>
                     <button onclick="login()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200">
                         로그인
                     </button>
-                    <button onclick="showRegister()" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 rounded-lg transition duration-200">
-                        회원가입
-                    </button>
                     <a href="/" class="block text-center text-gray-600 hover:text-gray-800">
                         <i class="fas fa-arrow-left mr-1"></i>메인으로 돌아가기
                     </a>
-                </div>
-            </div>
-        </div>
-
-        <!-- 회원가입 화면 -->
-        <div id="registerScreen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-            <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
-                <h2 class="text-3xl font-bold text-center text-indigo-900 mb-6">
-                    <i class="fas fa-user-plus mr-2"></i>회원가입
-                </h2>
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-gray-700 font-semibold mb-2">아이디</label>
-                        <input type="text" id="registerUsername" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="block text-gray-700 font-semibold mb-2">비밀번호</label>
-                        <input type="password" id="registerPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="block text-gray-700 font-semibold mb-2">이름</label>
-                        <input type="text" id="registerName" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <button onclick="register()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200">
-                        가입하기
-                    </button>
-                    <button onclick="showLogin()" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 rounded-lg transition duration-200">
-                        로그인으로 돌아가기
-                    </button>
                 </div>
             </div>
         </div>
@@ -644,7 +616,7 @@ app.get('/student', (c) => {
                             뉴스
                         </button>
                         <button onclick="showTab('ranking')" class="tab-btn px-6 py-3 font-semibold text-gray-600 hover:text-blue-600">
-                            순위표
+                            투자 랭킹
                         </button>
                     </div>
                 </div>
@@ -672,9 +644,10 @@ app.get('/student', (c) => {
                     <div id="newsList" class="space-y-4"></div>
                 </div>
 
-                <!-- 순위표 탭 -->
+                <!-- 투자 랭킹 탭 -->
                 <div id="rankingTab" class="tab-content hidden">
-                    <h2 class="text-2xl font-bold mb-6">순위표</h2>
+                    <h2 class="text-2xl font-bold mb-6">투자 랭킹</h2>
+                    <p class="text-gray-600 mb-4">평가 금액(총 자산) 기준 순위입니다</p>
                     <div id="rankingList" class="bg-white rounded-lg shadow-lg overflow-hidden"></div>
                 </div>
             </div>
