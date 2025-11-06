@@ -16,12 +16,12 @@ app.use('/static/*', serveStatic({ root: './public' }))
 
 // ==================== 인증 API ====================
 
-// 학생 로그인
+// 학생/교사 로그인
 app.post('/api/auth/login', async (c) => {
   const { username, password } = await c.req.json()
   
   const user = await c.env.DB.prepare(
-    'SELECT id, username, name, cash FROM users WHERE username = ? AND password = ?'
+    'SELECT id, username, name, user_type, cash, password_changed FROM users WHERE username = ? AND password = ?'
   ).bind(username, password).first()
   
   if (!user) {
@@ -29,6 +29,27 @@ app.post('/api/auth/login', async (c) => {
   }
   
   return c.json({ user })
+})
+
+// 비밀번호 변경
+app.post('/api/auth/change-password', async (c) => {
+  const { userId, oldPassword, newPassword } = await c.req.json()
+  
+  // 현재 비밀번호 확인
+  const user = await c.env.DB.prepare(
+    'SELECT id FROM users WHERE id = ? AND password = ?'
+  ).bind(userId, oldPassword).first()
+  
+  if (!user) {
+    return c.json({ error: '현재 비밀번호가 올바르지 않습니다.' }, 400)
+  }
+  
+  // 비밀번호 변경
+  await c.env.DB.prepare(
+    'UPDATE users SET password = ?, password_changed = 1 WHERE id = ?'
+  ).bind(newPassword, userId).run()
+  
+  return c.json({ success: true, message: '비밀번호가 변경되었습니다.' })
 })
 
 // 학생 회원가입
@@ -550,16 +571,18 @@ app.get('/student', (c) => {
         <div id="loginScreen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
             <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
                 <h2 class="text-3xl font-bold text-center text-indigo-900 mb-6">
-                    <i class="fas fa-user-graduate mr-2"></i>학생 로그인
+                    <i class="fas fa-user-graduate mr-2"></i>학생/교사 로그인
                 </h2>
                 <p class="text-center text-gray-600 mb-6">
-                    학번으로 로그인하세요 (예: 10101)<br/>
+                    학번 또는 교사 아이디로 로그인하세요<br/>
+                    학생: 10101 (1학년 1반 1번) ~ 20130 (2학년 1반 30번)<br/>
+                    교사: t001 ~ t090<br/>
                     초기 비밀번호: 1111
                 </p>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-gray-700 font-semibold mb-2">학번</label>
-                        <input type="text" id="loginUsername" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="예: 10101 (1학년 1반 1번)">
+                        <label class="block text-gray-700 font-semibold mb-2">아이디</label>
+                        <input type="text" id="loginUsername" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="예: 10101 또는 t001">
                     </div>
                     <div>
                         <label class="block text-gray-700 font-semibold mb-2">비밀번호</label>
@@ -571,6 +594,35 @@ app.get('/student', (c) => {
                     <a href="/" class="block text-center text-gray-600 hover:text-gray-800">
                         <i class="fas fa-arrow-left mr-1"></i>메인으로 돌아가기
                     </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- 비밀번호 변경 화면 -->
+        <div id="passwordChangeScreen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+            <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+                <h2 class="text-3xl font-bold text-center text-indigo-900 mb-4">
+                    <i class="fas fa-key mr-2"></i>비밀번호 변경
+                </h2>
+                <p class="text-center text-red-600 font-semibold mb-6">
+                    최초 로그인입니다. 비밀번호를 변경해주세요.
+                </p>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-2">현재 비밀번호</label>
+                        <input type="password" id="oldPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="1111">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-2">새 비밀번호</label>
+                        <input type="password" id="newPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="최소 4자 이상">
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-semibold mb-2">새 비밀번호 확인</label>
+                        <input type="password" id="confirmPassword" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <button onclick="changePassword()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200">
+                        비밀번호 변경
+                    </button>
                 </div>
             </div>
         </div>

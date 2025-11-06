@@ -20,9 +20,60 @@ async function login() {
         const response = await axios.post('/api/auth/login', { username, password });
         currentUser = response.data.user;
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
-        showMainScreen();
+        
+        // 비밀번호 변경 여부 확인
+        if (currentUser.password_changed === 0) {
+            showPasswordChangeDialog();
+        } else {
+            showMainScreen();
+        }
     } catch (error) {
         alert(error.response?.data?.error || '로그인에 실패했습니다.');
+    }
+}
+
+// 비밀번호 변경 다이얼로그 표시
+function showPasswordChangeDialog() {
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('passwordChangeScreen').classList.remove('hidden');
+}
+
+// 비밀번호 변경
+async function changePassword() {
+    const oldPassword = document.getElementById('oldPassword').value;
+    const newPassword = document.getElementById('newPassword').value;
+    const confirmPassword = document.getElementById('confirmPassword').value;
+
+    if (!oldPassword || !newPassword || !confirmPassword) {
+        alert('모든 필드를 입력해주세요.');
+        return;
+    }
+
+    if (newPassword !== confirmPassword) {
+        alert('새 비밀번호가 일치하지 않습니다.');
+        return;
+    }
+
+    if (newPassword.length < 4) {
+        alert('비밀번호는 최소 4자 이상이어야 합니다.');
+        return;
+    }
+
+    try {
+        await axios.post('/api/auth/change-password', {
+            userId: currentUser.id,
+            oldPassword: oldPassword,
+            newPassword: newPassword
+        });
+
+        alert('비밀번호가 변경되었습니다.');
+        currentUser.password_changed = 1;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        
+        document.getElementById('passwordChangeScreen').classList.add('hidden');
+        showMainScreen();
+    } catch (error) {
+        alert(error.response?.data?.error || '비밀번호 변경에 실패했습니다.');
     }
 }
 

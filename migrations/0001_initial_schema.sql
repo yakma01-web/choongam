@@ -1,10 +1,12 @@
--- 사용자 테이블 (학생)
+-- 사용자 테이블 (학생 + 교사)
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password TEXT NOT NULL,
   name TEXT NOT NULL,
+  user_type TEXT NOT NULL DEFAULT 'student',  -- 'student' or 'teacher'
   cash REAL DEFAULT 1000000.0,  -- 초기 자금 100만원
+  password_changed INTEGER DEFAULT 0,  -- 0: 초기 비밀번호, 1: 변경됨
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
