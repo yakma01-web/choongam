@@ -1,5 +1,6 @@
 // 전역 변수
 let stocks = [];
+let previousStocks = {}; // 이전 주가 저장 (주가 변동 색상 표시용)
 let news = [];
 let tradingAllowed = false;
 
@@ -51,6 +52,14 @@ async function checkAndApplyPendingPrices() {
 async function loadStocks() {
     try {
         const response = await axios.get('/api/stocks');
+        
+        // 이전 주가 저장 (첫 로드 시 현재 가격을 이전 가격으로 설정)
+        response.data.stocks.forEach(stock => {
+            if (!previousStocks[stock.id]) {
+                previousStocks[stock.id] = stock.current_price;
+            }
+        });
+        
         stocks = response.data.stocks;
     } catch (error) {
         console.error('주식 로드 실패:', error);
@@ -88,13 +97,44 @@ function displayStocks() {
         return;
     }
     
-    stocksBoard.innerHTML = stocks.map(stock => `
-        <div class="bg-gray-700 rounded-lg p-4 hover:bg-gray-600 transition">
-            <h3 class="text-lg font-bold text-white mb-2">${stock.name}</h3>
-            <p class="text-sm text-gray-400 mb-2">${stock.code}</p>
-            <p class="text-2xl font-bold text-green-400">${formatMoney(stock.current_price)}</p>
-        </div>
-    `).join('');
+    stocksBoard.innerHTML = stocks.map(stock => {
+        // 이전 가격과 현재 가격 비교
+        const previousPrice = previousStocks[stock.id];
+        const currentPrice = stock.current_price;
+        
+        // 가격 변동 계산
+        let priceChangeClass = 'text-white'; // 변동 없음 (기본)
+        let priceChangeIcon = '';
+        let priceChangeText = '';
+        
+        if (currentPrice > previousPrice) {
+            // 상승 - 빨간색
+            priceChangeClass = 'text-red-500';
+            priceChangeIcon = '<i class="fas fa-arrow-up mr-1"></i>';
+            const changeAmount = currentPrice - previousPrice;
+            const changePercent = ((changeAmount / previousPrice) * 100).toFixed(2);
+            priceChangeText = `<p class="text-sm text-red-500 mt-1">${priceChangeIcon}+${formatMoney(changeAmount)} (+${changePercent}%)</p>`;
+        } else if (currentPrice < previousPrice) {
+            // 하락 - 파란색
+            priceChangeClass = 'text-blue-500';
+            priceChangeIcon = '<i class="fas fa-arrow-down mr-1"></i>';
+            const changeAmount = previousPrice - currentPrice;
+            const changePercent = ((changeAmount / previousPrice) * 100).toFixed(2);
+            priceChangeText = `<p class="text-sm text-blue-500 mt-1">${priceChangeIcon}-${formatMoney(changeAmount)} (-${changePercent}%)</p>`;
+        }
+        
+        // 다음 업데이트를 위해 현재 가격을 이전 가격으로 저장
+        previousStocks[stock.id] = currentPrice;
+        
+        return `
+            <div class="bg-gray-700 rounded-lg p-4 hover:bg-gray-600 transition">
+                <h3 class="text-lg font-bold text-white mb-2">${stock.name}</h3>
+                <p class="text-sm text-gray-400 mb-2">${stock.code}</p>
+                <p class="text-2xl font-bold ${priceChangeClass}">${formatMoney(currentPrice)}</p>
+                ${priceChangeText}
+            </div>
+        `;
+    }).join('');
 }
 
 // 뉴스 티커 표시
