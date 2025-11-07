@@ -25,10 +25,10 @@ function getKoreanTime(): Date {
   return kst
 }
 
-// 베타 테스트 기간 확인 함수 (2024년 11월 16일 20:00까지)
+// 베타 테스트 기간 확인 함수 (2025년 11월 16일 20:00까지)
 function isBetaTestPeriod(): boolean {
   const now = getKoreanTime() // 한국 시간 기준
-  const betaEndDate = new Date('2024-11-16T20:00:00') // 한국 시간 20:00
+  const betaEndDate = new Date('2025-11-16T20:00:00') // 한국 시간 20:00
   // betaEndDate는 이미 한국 시간 기준이므로 직접 비교
   const nowKst = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds())
   return nowKst < betaEndDate
@@ -972,7 +972,7 @@ app.get('/', (c) => {
                                 <i class="fas fa-calendar-alt text-orange-600 text-xl mr-3 mt-1"></i>
                                 <div>
                                     <p class="font-bold text-orange-900">테스트 기간</p>
-                                    <p class="text-sm">2024년 11월 16일 (토) 오후 20:00 까지</p>
+                                    <p class="text-sm">2025년 11월 16일 (일) 오후 20:00 KST 까지</p>
                                 </div>
                             </div>
                             
@@ -1502,12 +1502,12 @@ app.get('/guide', (c) => {
                         <div class="space-y-3">
                             <div class="bg-yellow-50 rounded-lg p-4 border-l-4 border-yellow-500">
                                 <p class="font-bold text-orange-900 mb-2">
-                                    <i class="fas fa-calendar-alt mr-2"></i>2024년 11월 16일 (토) 오후 20:00 까지
+                                    <i class="fas fa-calendar-alt mr-2"></i>2025년 11월 16일 (일) 오후 20:00 KST 까지
                                 </p>
                                 <ul class="space-y-1 text-sm text-gray-800">
                                     <li>✅ <strong>24시간 거래 가능</strong> - 아래 시간 제한 없이 언제든지 거래 가능</li>
                                     <li>✅ <strong>실시간 주가 반영</strong> - 관리자 주가 변경 즉시 반영</li>
-                                    <li>⚠️ 11월 16일 20:00 이후부터 아래 정식 거래 시간 적용</li>
+                                    <li>⚠️ 2025년 11월 16일 20:00 KST 이후부터 아래 정식 거래 시간 적용</li>
                                 </ul>
                             </div>
                         </div>
