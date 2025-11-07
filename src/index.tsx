@@ -320,16 +320,30 @@ app.get('/api/stocks', async (c) => {
     'SELECT stock_id, new_price FROM pending_price_updates WHERE status = ?'
   ).bind('pending').all()
   
-  // 주식 목록에 예약된 가격 추가
-  const stocksWithPending = stocks.results.map(stock => {
+  // 각 주식의 이전 가격 가져오기 (price_history에서 최근 2개)
+  const stocksWithData = await Promise.all(stocks.results.map(async (stock) => {
     const pendingUpdate = pending.results.find(p => p.stock_id === stock.id)
+    
+    // 가격 이력에서 최근 2개 가져오기 (현재 가격 제외)
+    const history = await c.env.DB.prepare(
+      'SELECT price FROM price_history WHERE stock_id = ? ORDER BY created_at DESC LIMIT 2'
+    ).bind(stock.id).all()
+    
+    // 이전 가격 결정: price_history가 있으면 사용, 없으면 현재 가격 사용
+    let previous_price = stock.current_price
+    if (history.results && history.results.length > 0) {
+      // 가장 최근 이력의 가격을 이전 가격으로 사용
+      previous_price = history.results[0].price
+    }
+    
     return {
       ...stock,
-      pending_price: pendingUpdate ? pendingUpdate.new_price : null
+      pending_price: pendingUpdate ? pendingUpdate.new_price : null,
+      previous_price: previous_price
     }
-  })
+  }))
   
-  return c.json({ stocks: stocksWithPending })
+  return c.json({ stocks: stocksWithData })
 })
 
 // 특정 주식 상세 조회

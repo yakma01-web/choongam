@@ -98,8 +98,8 @@ function displayStocks() {
     }
     
     stocksBoard.innerHTML = stocks.map(stock => {
-        // 이전 가격과 현재 가격 비교
-        const previousPrice = previousStocks[stock.id];
+        // API에서 제공하는 이전 가격 사용 (previous_price)
+        const previousPrice = stock.previous_price || stock.current_price;
         const currentPrice = stock.current_price;
         
         // 가격 변동 계산
@@ -122,9 +122,6 @@ function displayStocks() {
             const changePercent = ((changeAmount / previousPrice) * 100).toFixed(2);
             priceChangeText = `<p class="text-sm text-blue-500 mt-1">${priceChangeIcon}-${formatMoney(changeAmount)} (-${changePercent}%)</p>`;
         }
-        
-        // 다음 업데이트를 위해 현재 가격을 이전 가격으로 저장
-        previousStocks[stock.id] = currentPrice;
         
         return `
             <div class="bg-gray-700 rounded-lg p-4 hover:bg-gray-600 transition">
