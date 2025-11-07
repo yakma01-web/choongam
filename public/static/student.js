@@ -5,6 +5,8 @@ let userStocks = [];
 let news = [];
 let transactions = [];
 let users = [];
+let stockCharts = {}; // 각 주식의 차트 인스턴스를 저장
+let tradingAllowed = false; // 거래 가능 여부
 
 // 로그인
 async function login() {
@@ -91,7 +93,7 @@ function logout() {
 
 function showMainScreen() {
     document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('registerScreen').classList.add('hidden');
+    document.getElementById('passwordChangeScreen').classList.add('hidden');
     document.getElementById('mainScreen').classList.remove('hidden');
     
     document.getElementById('userName').textContent = currentUser.name;
@@ -100,6 +102,8 @@ function showMainScreen() {
 
 // 데이터 로드
 async function loadData() {
+    await checkTradingStatus();
+    await checkAndApplyPendingPrices();
     await loadStocks();
     await loadUserInfo();
     await loadUserStocks();
@@ -107,6 +111,17 @@ async function loadData() {
     await loadTransactions();
     await loadUsers();
     updateDisplay();
+}
+
+// 거래 시간에 예약된 주가 자동 적용
+async function checkAndApplyPendingPrices() {
+    try {
+        if (tradingAllowed) {
+            await axios.post('/api/apply-pending-prices');
+        }
+    } catch (error) {
+        // 에러 무시 (이미 적용되었거나 예약이 없을 수 있음)
+    }
 }
 
 async function loadStocks() {
@@ -139,7 +154,7 @@ async function loadUserStocks() {
 
 async function loadNews() {
     try {
-        const response = await axios.get('/api/news');
+        const response = await axios.get(`/api/news?userId=${currentUser.id}`);
         news = response.data.news;
     } catch (error) {
         console.error('뉴스 로드 실패:', error);
@@ -161,6 +176,70 @@ async function loadUsers() {
         users = response.data.users;
     } catch (error) {
         console.error('사용자 목록 로드 실패:', error);
+    }
+}
+
+let lastTradingStatus = null; // 이전 거래 상태 추적
+let isBetaPeriod = false; // 베타 테스트 기간 여부
+
+async function checkTradingStatus() {
+    try {
+        const response = await axios.get('/api/trading-status');
+        const currentStatus = response.data.allowed;
+        isBetaPeriod = response.data.isBeta || false;
+        
+        // 베타 기간이 아닐 때만 거래 시간 종료 시 주가 업데이트
+        if (!isBetaPeriod && lastTradingStatus === true && currentStatus === false) {
+            console.log('거래 시간 종료 감지 - 주가 자동 업데이트 시작');
+            await updateStockPricesByVolume();
+        }
+        
+        tradingAllowed = currentStatus;
+        lastTradingStatus = currentStatus;
+        updateTradingStatusDisplay();
+    } catch (error) {
+        console.error('거래 시간 확인 실패:', error);
+    }
+}
+
+// 거래량 기반 주가 자동 업데이트
+async function updateStockPricesByVolume() {
+    try {
+        const response = await axios.post('/api/update-prices-by-volume');
+        if (response.data.updated > 0) {
+            console.log(`${response.data.updated}개 종목의 주가가 업데이트되었습니다.`);
+            // 주가 업데이트 후 데이터 새로고침
+            await loadStocks();
+            updateDisplay();
+        }
+    } catch (error) {
+        console.error('주가 업데이트 실패:', error);
+    }
+}
+
+function updateTradingStatusDisplay() {
+    // 헤더에 거래 가능 여부 표시
+    const header = document.querySelector('.bg-indigo-900');
+    let statusBadge = document.getElementById('tradingStatusBadge');
+    
+    if (!statusBadge) {
+        statusBadge = document.createElement('div');
+        statusBadge.id = 'tradingStatusBadge';
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold';
+        const h1 = header.querySelector('h1');
+        h1.appendChild(statusBadge);
+    }
+    
+    if (isBetaPeriod) {
+        // 베타 테스트 기간
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-yellow-500 text-white animate-pulse';
+        statusBadge.innerHTML = '<i class="fas fa-star mr-1"></i>베타 테스트 - 24시간 거래 가능';
+    } else if (tradingAllowed) {
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-green-500 text-white';
+        statusBadge.innerHTML = '<i class="fas fa-check-circle mr-1"></i>거래 가능';
+    } else {
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-red-500 text-white';
+        statusBadge.innerHTML = '<i class="fas fa-times-circle mr-1"></i>거래 불가';
     }
 }
 
@@ -192,6 +271,11 @@ function displayStocks() {
                 <p class="text-3xl font-bold text-blue-600 mb-4">${formatMoney(stock.current_price)}</p>
                 <p class="text-sm text-gray-600 mb-4">보유 수량: ${holding}주</p>
                 
+                <!-- 가격 변동 차트 -->
+                <div class="mb-4">
+                    <canvas id="chart-${stock.id}" height="120"></canvas>
+                </div>
+                
                 <div class="space-y-2">
                     <div class="flex space-x-2">
                         <input type="number" id="qty-${stock.id}" class="flex-1 px-3 py-2 border rounded" placeholder="수량" min="1" value="1">
@@ -206,6 +290,11 @@ function displayStocks() {
             </div>
         `;
     }).join('');
+    
+    // 차트 렌더링 (DOM이 준비된 후)
+    setTimeout(() => {
+        stocks.forEach(stock => renderStockChart(stock.id));
+    }, 100);
 }
 
 // 포트폴리오 표시
@@ -272,20 +361,28 @@ function displayNews() {
         newsList.innerHTML = '<p class="text-gray-500 text-center py-8">등록된 뉴스가 없습니다.</p>';
     } else {
         newsList.innerHTML = news.map(item => {
+            const isPurchased = item.purchased !== false;
+            const isLocked = !isPurchased && item.type === 'PREMIUM';
+            
             const typeClass = item.type === 'FREE' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800';
             const typeText = item.type === 'FREE' ? '무료' : `유료 (${formatMoney(item.price)})`;
             
+            // 잠긴 뉴스는 미리보기 표시 안함
+            const contentPreview = isLocked ? '' : `<p class="text-gray-600 mb-3">${item.content.substring(0, 100)}${item.content.length > 100 ? '...' : ''}</p>`;
+            const buttonText = isLocked ? '🔒 구매하기' : '자세히 보기';
+            const buttonClass = isLocked ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-500 hover:bg-blue-600';
+            
             return `
-                <div class="bg-white rounded-lg shadow p-6">
+                <div class="bg-white rounded-lg shadow p-6 ${isLocked ? 'opacity-75' : ''}">
                     <div class="flex justify-between items-start mb-3">
                         <h3 class="text-xl font-bold flex-1">${item.title}</h3>
                         <span class="${typeClass} px-3 py-1 rounded font-semibold text-sm">${typeText}</span>
                     </div>
-                    <p class="text-gray-600 mb-3">${item.content.substring(0, 100)}${item.content.length > 100 ? '...' : ''}</p>
+                    ${contentPreview}
                     <div class="flex justify-between items-center">
                         <p class="text-sm text-gray-500">${new Date(item.created_at).toLocaleString('ko-KR')}</p>
-                        <button onclick="viewNews(${item.id})" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
-                            자세히 보기
+                        <button onclick="viewNews(${item.id})" class="${buttonClass} text-white px-4 py-2 rounded">
+                            ${buttonText}
                         </button>
                     </div>
                 </div>
@@ -447,6 +544,105 @@ function showTab(tabName) {
     event.target.classList.remove('text-gray-600');
 }
 
+// 주식 차트 렌더링
+async function renderStockChart(stockId) {
+    try {
+        // 주가 이력 조회
+        const response = await axios.get(`/api/stocks/${stockId}`);
+        const history = response.data.history;
+        
+        // 차트가 이미 존재하면 파괴
+        if (stockCharts[stockId]) {
+            stockCharts[stockId].destroy();
+        }
+        
+        const canvas = document.getElementById(`chart-${stockId}`);
+        if (!canvas) return;
+        
+        const ctx = canvas.getContext('2d');
+        
+        // 데이터가 없으면 기본 메시지
+        if (!history || history.length === 0) {
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#999';
+            ctx.textAlign = 'center';
+            ctx.fillText('가격 변동 기록이 없습니다', canvas.width / 2, canvas.height / 2);
+            return;
+        }
+        
+        // 최신순으로 정렬된 데이터를 오래된순으로 변경
+        const sortedHistory = [...history].reverse();
+        
+        // 차트 데이터 준비
+        const labels = sortedHistory.map(h => {
+            const date = new Date(h.created_at);
+            return date.toLocaleString('ko-KR', { 
+                month: 'short', 
+                day: 'numeric', 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+        });
+        
+        const prices = sortedHistory.map(h => h.price);
+        
+        // 차트 생성
+        stockCharts[stockId] = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '주가',
+                    data: prices,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.3,
+                    fill: true,
+                    pointRadius: 3,
+                    pointHoverRadius: 5
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return '주가: ' + formatMoney(context.parsed.y);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        ticks: {
+                            callback: function(value) {
+                                return (value / 1000).toFixed(0) + 'K';
+                            }
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            font: {
+                                size: 10
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        console.error(`차트 렌더링 실패 (주식 ID: ${stockId}):`, error);
+    }
+}
+
 // 유틸리티 함수
 function formatMoney(amount) {
     return new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(amount);
@@ -458,5 +654,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
         showMainScreen();
+        
+        // 30초마다 거래 시간 상태 확인
+        setInterval(checkTradingStatus, 30000);
     }
 });

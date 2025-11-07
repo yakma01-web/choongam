@@ -14,6 +14,221 @@ app.use('/api/*', cors())
 // Static files
 app.use('/static/*', serveStatic({ root: './public' }))
 
+// ==================== 유틸리티 함수 ====================
+
+// 한국 시간(KST, UTC+9) 가져오기
+function getKoreanTime(): Date {
+  // 현재 UTC 시간을 가져와서 한국 시간(UTC+9)으로 변환
+  const now = new Date()
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000)
+  const kst = new Date(utc + (9 * 60 * 60 * 1000))
+  return kst
+}
+
+// 베타 테스트 기간 확인 함수 (2024년 11월 16일 20:00까지)
+function isBetaTestPeriod(): boolean {
+  const now = getKoreanTime() // 한국 시간 기준
+  const betaEndDate = new Date('2024-11-16T20:00:00') // 한국 시간 20:00
+  // betaEndDate는 이미 한국 시간 기준이므로 직접 비교
+  const nowKst = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds())
+  return nowKst < betaEndDate
+}
+
+// 거래 가능 시간 체크 함수
+function isTradingTime(): { allowed: boolean; message?: string; isBeta?: boolean } {
+  // 베타 테스트 기간에는 24시간 거래 가능
+  if (isBetaTestPeriod()) {
+    return { 
+      allowed: true, 
+      isBeta: true,
+      message: '🎉 베타 테스트 기간 - 24시간 거래 가능!' 
+    }
+  }
+  
+  const now = getKoreanTime() // 한국 시간 기준
+  const hours = now.getHours()
+  const minutes = now.getMinutes()
+  const currentTime = hours * 60 + minutes // 분 단위로 변환
+  
+  // 장 운영 시간 체크 (08:00 ~ 16:00)
+  if (currentTime < 8 * 60 || currentTime >= 16 * 60) {
+    return { 
+      allowed: false, 
+      message: '장 운영 시간이 아닙니다. (운영시간: 08:00 ~ 16:00 KST)' 
+    }
+  }
+  
+  // 거래 가능 시간대
+  const tradingWindows = [
+    { start: 8 * 60, end: 8 * 60 + 20 },      // 08:00 ~ 08:20
+    { start: 9 * 60 + 10, end: 9 * 60 + 20 }, // 09:10 ~ 09:20
+    { start: 10 * 60 + 10, end: 10 * 60 + 20 }, // 10:10 ~ 10:20
+    { start: 11 * 60 + 10, end: 11 * 60 + 20 }, // 11:10 ~ 11:20
+    { start: 12 * 60 + 10, end: 12 * 60 + 20 }, // 12:10 ~ 12:20
+    { start: 13 * 60, end: 13 * 60 + 10 },     // 13:00 ~ 13:10
+    { start: 14 * 60, end: 14 * 60 + 10 },     // 14:00 ~ 14:10
+    { start: 15 * 60, end: 15 * 60 + 10 },     // 15:00 ~ 15:10
+  ]
+  
+  // 현재 시간이 거래 가능 시간대에 포함되는지 확인
+  for (const window of tradingWindows) {
+    if (currentTime >= window.start && currentTime < window.end) {
+      return { allowed: true }
+    }
+  }
+  
+  return { 
+    allowed: false, 
+    message: '거래 가능 시간이 아닙니다. 거래 시간을 확인해주세요.' 
+  }
+}
+
+// 현재 거래 시간 윈도우 가져오기 (예: '2024-01-15 08:00')
+function getCurrentTimeWindow(): string {
+  const now = getKoreanTime() // 한국 시간 기준
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const hours = String(now.getHours()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:00`
+}
+
+// 거래량 집계 및 저장 함수
+async function aggregateTradingVolume(db: D1Database, stockId: number, type: 'BUY' | 'SELL', quantity: number) {
+  const timeWindow = getCurrentTimeWindow()
+  
+  // 현재 주가 조회
+  const stock = await db.prepare(
+    'SELECT current_price FROM stocks WHERE id = ?'
+  ).bind(stockId).first()
+  
+  if (!stock) return
+  
+  // 거래량 집계 레코드 확인
+  const existing = await db.prepare(
+    'SELECT * FROM trading_volume WHERE stock_id = ? AND time_window = ?'
+  ).bind(stockId, timeWindow).first()
+  
+  if (existing) {
+    // 기존 레코드 업데이트
+    if (type === 'BUY') {
+      await db.prepare(`
+        UPDATE trading_volume 
+        SET buy_volume = buy_volume + ?, 
+            net_volume = (buy_volume + ?) - sell_volume
+        WHERE stock_id = ? AND time_window = ?
+      `).bind(quantity, quantity, stockId, timeWindow).run()
+    } else {
+      await db.prepare(`
+        UPDATE trading_volume 
+        SET sell_volume = sell_volume + ?, 
+            net_volume = buy_volume - (sell_volume + ?)
+        WHERE stock_id = ? AND time_window = ?
+      `).bind(quantity, quantity, stockId, timeWindow).run()
+    }
+  } else {
+    // 새 레코드 생성
+    const buyVolume = type === 'BUY' ? quantity : 0
+    const sellVolume = type === 'SELL' ? quantity : 0
+    const netVolume = buyVolume - sellVolume
+    
+    await db.prepare(`
+      INSERT INTO trading_volume 
+      (stock_id, time_window, buy_volume, sell_volume, net_volume, price_before)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(stockId, timeWindow, buyVolume, sellVolume, netVolume, stock.current_price).run()
+  }
+}
+
+// 주가 자동 업데이트 함수 (거래량 기반)
+async function updateStockPrices(db: D1Database) {
+  const timeWindow = getCurrentTimeWindow()
+  
+  // 미적용 거래량 데이터 조회
+  const volumes = await db.prepare(`
+    SELECT tv.*, s.current_price, s.code, s.name,
+           COALESCE(pis.impact_rate, 0.01) as impact_rate,
+           COALESCE(pis.max_change_rate, 0.05) as max_change_rate,
+           COALESCE(pis.min_volume, 10) as min_volume
+    FROM trading_volume tv
+    JOIN stocks s ON tv.stock_id = s.id
+    LEFT JOIN price_impact_settings pis ON tv.stock_id = pis.stock_id
+    WHERE tv.time_window = ? AND tv.applied_at IS NULL
+  `).bind(timeWindow).all()
+  
+  if (!volumes.results || volumes.results.length === 0) {
+    return { updated: 0, message: '업데이트할 거래량 데이터가 없습니다.' }
+  }
+  
+  let updatedCount = 0
+  
+  for (const vol of volumes.results) {
+    // 최소 거래량 체크
+    const totalVolume = vol.buy_volume + vol.sell_volume
+    if (totalVolume < vol.min_volume) {
+      // 거래량이 너무 적으면 주가 미반영
+      await db.prepare(`
+        UPDATE trading_volume 
+        SET applied_at = CURRENT_TIMESTAMP, price_after = price_before
+        WHERE id = ?
+      `).bind(vol.id).run()
+      continue
+    }
+    
+    // 주가 변동 계산
+    // 순 거래량(net_volume)에 따라 가격 변동
+    // 양수면 매수 우세 -> 가격 상승, 음수면 매도 우세 -> 가격 하락
+    const priceChangeRate = (vol.net_volume / 100) * vol.impact_rate
+    
+    // 최대 변동률 제한
+    const limitedChangeRate = Math.max(
+      -vol.max_change_rate,
+      Math.min(vol.max_change_rate, priceChangeRate)
+    )
+    
+    const newPrice = Math.round(vol.current_price * (1 + limitedChangeRate))
+    
+    // 주가 업데이트
+    await db.prepare(`
+      UPDATE stocks 
+      SET current_price = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(newPrice, vol.stock_id).run()
+    
+    // 가격 변동 이력 저장
+    await db.prepare(`
+      INSERT INTO price_history (stock_id, price, changed_by)
+      VALUES (?, ?, ?)
+    `).bind(vol.stock_id, newPrice, 'AUTO_UPDATE').run()
+    
+    // 거래량 데이터 업데이트
+    await db.prepare(`
+      UPDATE trading_volume 
+      SET price_after = ?, applied_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(newPrice, vol.id).run()
+    
+    updatedCount++
+  }
+  
+  return { 
+    updated: updatedCount, 
+    message: `${updatedCount}개 종목의 주가가 업데이트되었습니다.` 
+  }
+}
+
+// 현재 거래 시간 상태 조회 API
+app.get('/api/trading-status', (c) => {
+  const status = isTradingTime()
+  const kstTime = getKoreanTime()
+  return c.json({
+    allowed: status.allowed,
+    isBeta: status.isBeta || false,
+    message: status.message || '거래 가능 시간입니다.',
+    currentTime: kstTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+  })
+})
+
 // ==================== 인증 API ====================
 
 // 학생/교사 로그인
@@ -94,13 +309,27 @@ app.post('/api/auth/admin-login', async (c) => {
 
 // ==================== 주식 API ====================
 
-// 모든 주식 목록 조회
+// 모든 주식 목록 조회 (예약된 주가 포함)
 app.get('/api/stocks', async (c) => {
   const stocks = await c.env.DB.prepare(
     'SELECT * FROM stocks ORDER BY id'
   ).all()
   
-  return c.json({ stocks: stocks.results })
+  // 예약된 주가 변경 가져오기
+  const pending = await c.env.DB.prepare(
+    'SELECT stock_id, new_price FROM pending_price_updates WHERE status = ?'
+  ).bind('pending').all()
+  
+  // 주식 목록에 예약된 가격 추가
+  const stocksWithPending = stocks.results.map(stock => {
+    const pendingUpdate = pending.results.find(p => p.stock_id === stock.id)
+    return {
+      ...stock,
+      pending_price: pendingUpdate ? pendingUpdate.new_price : null
+    }
+  })
+  
+  return c.json({ stocks: stocksWithPending })
 })
 
 // 특정 주식 상세 조회
@@ -123,10 +352,10 @@ app.get('/api/stocks/:id', async (c) => {
   return c.json({ stock, history: history.results })
 })
 
-// 주가 업데이트 (관리자 전용)
+// 주가 업데이트 (관리자 전용 - 24시간 가능, 거래 시간에 자동 반영)
 app.post('/api/stocks/:id/update-price', async (c) => {
   const stockId = c.req.param('id')
-  const { price, adminUsername } = await c.req.json()
+  const { price, adminUsername, forceApply } = await c.req.json()
   
   // 관리자 인증 확인
   const admin = await c.env.DB.prepare(
@@ -137,21 +366,115 @@ app.post('/api/stocks/:id/update-price', async (c) => {
     return c.json({ error: '권한이 없습니다.' }, 403)
   }
   
-  // 주가 업데이트
-  await c.env.DB.prepare(
-    'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-  ).bind(price, stockId).run()
+  // 거래 시간 확인
+  const tradingStatus = isTradingTime()
   
-  // 주가 변동 이력 저장
-  await c.env.DB.prepare(
-    'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
-  ).bind(stockId, price, adminUsername).run()
+  // 강제 즉시 반영 또는 거래 시간이면 즉시 반영
+  if (forceApply || tradingStatus.allowed) {
+    // 즉시 반영
+    await c.env.DB.prepare(
+      'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    ).bind(price, stockId).run()
+    
+    // 주가 변동 이력 저장
+    const changeNote = forceApply ? `${adminUsername} (강제 반영)` : adminUsername
+    await c.env.DB.prepare(
+      'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
+    ).bind(stockId, price, changeNote).run()
+    
+    // 기존 예약이 있으면 삭제
+    await c.env.DB.prepare(
+      'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
+    ).bind(stockId, 'pending').run()
+    
+    const stock = await c.env.DB.prepare(
+      'SELECT * FROM stocks WHERE id = ?'
+    ).bind(stockId).first()
+    
+    return c.json({ 
+      stock, 
+      message: forceApply ? '주가가 강제로 즉시 반영되었습니다.' : '주가가 즉시 반영되었습니다.',
+      applied: true,
+      forced: forceApply || false
+    })
+  } else {
+    // 거래 시간이 아니면 예약으로 저장
+    // 기존 대기 중인 업데이트가 있으면 삭제
+    await c.env.DB.prepare(
+      'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
+    ).bind(stockId, 'pending').run()
+    
+    // 새로운 예약 추가
+    await c.env.DB.prepare(
+      'INSERT INTO pending_price_updates (stock_id, new_price, changed_by) VALUES (?, ?, ?)'
+    ).bind(stockId, price, adminUsername).run()
+    
+    const stock = await c.env.DB.prepare(
+      'SELECT * FROM stocks WHERE id = ?'
+    ).bind(stockId).first()
+    
+    return c.json({ 
+      stock: { ...stock, pending_price: price },
+      message: '주가 변경이 예약되었습니다. 다음 거래 시간에 자동으로 반영됩니다.',
+      applied: false,
+      pending: true
+    })
+  }
+})
+
+// 예약된 주가 변경 목록 조회
+app.get('/api/pending-price-updates', async (c) => {
+  const pending = await c.env.DB.prepare(`
+    SELECT p.*, s.code, s.name, s.current_price
+    FROM pending_price_updates p
+    JOIN stocks s ON p.stock_id = s.id
+    WHERE p.status = 'pending'
+    ORDER BY p.created_at DESC
+  `).all()
   
-  const stock = await c.env.DB.prepare(
-    'SELECT * FROM stocks WHERE id = ?'
-  ).bind(stockId).first()
+  return c.json({ pending: pending.results })
+})
+
+// 예약된 주가 변경 적용 (거래 시간에 자동 호출)
+app.post('/api/apply-pending-prices', async (c) => {
+  // 거래 시간 확인
+  const tradingStatus = isTradingTime()
+  if (!tradingStatus.allowed) {
+    return c.json({ error: '거래 시간이 아닙니다.' }, 400)
+  }
   
-  return c.json({ stock })
+  // 모든 대기 중인 주가 변경 가져오기
+  const pending = await c.env.DB.prepare(
+    'SELECT * FROM pending_price_updates WHERE status = ? ORDER BY created_at ASC'
+  ).bind('pending').all()
+  
+  let appliedCount = 0
+  
+  // 각 주가 변경 적용
+  for (const update of pending.results) {
+    // 주가 업데이트
+    await c.env.DB.prepare(
+      'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    ).bind(update.new_price, update.stock_id).run()
+    
+    // 주가 변동 이력 저장
+    await c.env.DB.prepare(
+      'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
+    ).bind(update.stock_id, update.new_price, update.changed_by).run()
+    
+    // 예약 상태 업데이트
+    await c.env.DB.prepare(
+      'UPDATE pending_price_updates SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?'
+    ).bind('applied', update.id).run()
+    
+    appliedCount++
+  }
+  
+  return c.json({ 
+    success: true, 
+    message: `${appliedCount}개의 주가 변경이 적용되었습니다.`,
+    appliedCount 
+  })
 })
 
 // ==================== 사용자 주식 보유 API ====================
@@ -177,6 +500,12 @@ app.get('/api/users/:userId/stocks', async (c) => {
 // 주식 매수
 app.post('/api/transactions/buy', async (c) => {
   const { userId, stockId, quantity } = await c.req.json()
+  
+  // 거래 시간 확인
+  const tradingStatus = isTradingTime()
+  if (!tradingStatus.allowed) {
+    return c.json({ error: tradingStatus.message }, 400)
+  }
   
   // 사용자 정보 조회
   const user = await c.env.DB.prepare(
@@ -235,12 +564,21 @@ app.post('/api/transactions/buy', async (c) => {
     ).bind(userId, stockId, quantity, stock.current_price).run()
   }
   
+  // 4. 거래량 집계
+  await aggregateTradingVolume(c.env.DB, stockId, 'BUY', quantity)
+  
   return c.json({ success: true, message: '매수가 완료되었습니다.' })
 })
 
 // 주식 매도
 app.post('/api/transactions/sell', async (c) => {
   const { userId, stockId, quantity } = await c.req.json()
+  
+  // 거래 시간 확인
+  const tradingStatus = isTradingTime()
+  if (!tradingStatus.allowed) {
+    return c.json({ error: tradingStatus.message }, 400)
+  }
   
   // 보유 주식 확인
   const userStock = await c.env.DB.prepare(
@@ -286,6 +624,9 @@ app.post('/api/transactions/sell', async (c) => {
     ).bind(newQuantity, userId, stockId).run()
   }
   
+  // 4. 거래량 집계
+  await aggregateTradingVolume(c.env.DB, stockId, 'SELL', quantity)
+  
   return c.json({ success: true, message: '매도가 완료되었습니다.' })
 })
 
@@ -305,15 +646,127 @@ app.get('/api/transactions/:userId', async (c) => {
   return c.json({ transactions: transactions.results })
 })
 
+// ==================== 거래량 기반 주가 업데이트 API ====================
+
+// 주가 자동 업데이트 실행 (수동 트리거)
+app.post('/api/update-prices-by-volume', async (c) => {
+  try {
+    const result = await updateStockPrices(c.env.DB)
+    return c.json(result)
+  } catch (error) {
+    return c.json({ error: '주가 업데이트 중 오류가 발생했습니다.' }, 500)
+  }
+})
+
+// 거래량 집계 현황 조회
+app.get('/api/trading-volume/current', async (c) => {
+  const timeWindow = getCurrentTimeWindow()
+  
+  const volumes = await c.env.DB.prepare(`
+    SELECT tv.*, s.code, s.name, s.current_price
+    FROM trading_volume tv
+    JOIN stocks s ON tv.stock_id = s.id
+    WHERE tv.time_window = ?
+    ORDER BY s.code
+  `).bind(timeWindow).all()
+  
+  return c.json({ 
+    timeWindow,
+    volumes: volumes.results 
+  })
+})
+
+// 주가 영향 설정 조회
+app.get('/api/price-impact-settings', async (c) => {
+  const settings = await c.env.DB.prepare(`
+    SELECT pis.*, s.code, s.name
+    FROM price_impact_settings pis
+    JOIN stocks s ON pis.stock_id = s.id
+    ORDER BY s.code
+  `).all()
+  
+  return c.json({ settings: settings.results })
+})
+
+// 주가 영향 설정 업데이트 (관리자)
+app.post('/api/price-impact-settings/:stockId', async (c) => {
+  const stockId = c.req.param('stockId')
+  const { impactRate, maxChangeRate, minVolume } = await c.req.json()
+  
+  // 기존 설정 확인
+  const existing = await c.env.DB.prepare(
+    'SELECT * FROM price_impact_settings WHERE stock_id = ?'
+  ).bind(stockId).first()
+  
+  if (existing) {
+    // 업데이트
+    await c.env.DB.prepare(`
+      UPDATE price_impact_settings 
+      SET impact_rate = ?, max_change_rate = ?, min_volume = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE stock_id = ?
+    `).bind(impactRate, maxChangeRate, minVolume, stockId).run()
+  } else {
+    // 새로 생성
+    await c.env.DB.prepare(`
+      INSERT INTO price_impact_settings (stock_id, impact_rate, max_change_rate, min_volume)
+      VALUES (?, ?, ?, ?)
+    `).bind(stockId, impactRate, maxChangeRate, minVolume).run()
+  }
+  
+  return c.json({ success: true, message: '주가 영향 설정이 저장되었습니다.' })
+})
+
+// 거래량 이력 조회 (특정 종목)
+app.get('/api/trading-volume/history/:stockId', async (c) => {
+  const stockId = c.req.param('stockId')
+  
+  const history = await c.env.DB.prepare(`
+    SELECT tv.*, s.code, s.name
+    FROM trading_volume tv
+    JOIN stocks s ON tv.stock_id = s.id
+    WHERE tv.stock_id = ?
+    ORDER BY tv.time_window DESC
+    LIMIT 50
+  `).bind(stockId).all()
+  
+  return c.json({ history: history.results })
+})
+
 // ==================== 뉴스 API ====================
 
-// 모든 뉴스 조회
+// 모든 뉴스 조회 (사용자별 구매 여부 포함)
 app.get('/api/news', async (c) => {
+  const userId = c.req.query('userId')
+  
   const news = await c.env.DB.prepare(
     'SELECT * FROM news ORDER BY created_at DESC'
   ).all()
   
-  return c.json({ news: news.results })
+  // 유료 뉴스의 경우 구매 여부 확인
+  const newsWithPurchaseInfo = await Promise.all(news.results.map(async (item) => {
+    if (item.type === 'PREMIUM' && userId) {
+      // 구매 여부 확인
+      const viewed = await c.env.DB.prepare(
+        'SELECT id FROM news_views WHERE user_id = ? AND news_id = ?'
+      ).bind(userId, item.id).first()
+      
+      // 구매하지 않은 경우 제목과 내용 숨김
+      if (!viewed) {
+        return {
+          ...item,
+          title: '🔒 잠긴 유료 뉴스',
+          content: '이 뉴스를 보려면 구매가 필요합니다.',
+          purchased: false
+        }
+      }
+      
+      return { ...item, purchased: true }
+    }
+    
+    return { ...item, purchased: true }
+  }))
+  
+  return c.json({ news: newsWithPurchaseInfo })
 })
 
 // 뉴스 생성 (관리자 전용)
@@ -498,7 +951,7 @@ app.get('/', (c) => {
     </head>
     <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
         <div class="container mx-auto px-4 py-8">
-            <div class="text-center mb-12">
+            <div class="text-center mb-8">
                 <h1 class="text-5xl font-bold text-indigo-900 mb-4">
                     <i class="fas fa-chart-line mr-3"></i>
                     충암고 가상 주식 투자
@@ -506,35 +959,112 @@ app.get('/', (c) => {
                 <p class="text-xl text-gray-700">실전 같은 주식 투자 시뮬레이션</p>
             </div>
             
-            <div class="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-                <!-- 학생 메뉴 -->
-                <div class="bg-white rounded-2xl shadow-xl p-8 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
-                    <div class="text-center mb-6">
-                        <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <i class="fas fa-user-graduate text-4xl text-blue-600"></i>
+            <!-- 베타 테스트 공지사항 -->
+            <div class="max-w-4xl mx-auto mb-8">
+                <div class="bg-gradient-to-r from-yellow-400 via-orange-400 to-red-400 rounded-2xl shadow-2xl p-6 border-4 border-yellow-500">
+                    <div class="bg-white bg-opacity-95 rounded-xl p-6">
+                        <h2 class="text-2xl font-bold text-center mb-4 text-orange-900">
+                            <i class="fas fa-bullhorn mr-2"></i>
+                            🎉 베타 테스트 기간 안내 🎉
+                        </h2>
+                        <div class="space-y-3 text-gray-800">
+                            <div class="flex items-start bg-yellow-50 rounded-lg p-3">
+                                <i class="fas fa-calendar-alt text-orange-600 text-xl mr-3 mt-1"></i>
+                                <div>
+                                    <p class="font-bold text-orange-900">테스트 기간</p>
+                                    <p class="text-sm">2024년 11월 16일 (토) 오후 20:00 까지</p>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-start bg-green-50 rounded-lg p-3">
+                                <i class="fas fa-clock text-green-600 text-xl mr-3 mt-1"></i>
+                                <div>
+                                    <p class="font-bold text-green-900">베타 기간 특별 혜택</p>
+                                    <ul class="text-sm space-y-1 mt-1">
+                                        <li>✅ <strong>24시간 거래 가능</strong> - 언제든지 주식을 사고 팔 수 있습니다</li>
+                                        <li>✅ <strong>실시간 주가 반영</strong> - 관리자 주가 변경이 즉시 반영됩니다</li>
+                                        <li>✅ <strong>자유로운 테스트</strong> - 시스템을 충분히 경험해보세요</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-start bg-blue-50 rounded-lg p-3">
+                                <i class="fas fa-info-circle text-blue-600 text-xl mr-3 mt-1"></i>
+                                <div>
+                                    <p class="font-bold text-blue-900">정식 운영 (11월 16일 20:00 이후)</p>
+                                    <ul class="text-sm space-y-1 mt-1">
+                                        <li>• 거래 시간 제한 적용 (08:00-16:00, 8개 시간대)</li>
+                                        <li>• 거래량 기반 자동 주가 변동 시스템 작동</li>
+                                        <li>• 관리자 주가 변경은 예약 후 거래 시간에 반영</li>
+                                    </ul>
+                                </div>
+                            </div>
                         </div>
-                        <h2 class="text-3xl font-bold text-gray-800">학생</h2>
                     </div>
-                    <p class="text-gray-600 text-center mb-6">
+                </div>
+            </div>
+            
+            <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+                <!-- 주가 현황판 메뉴 -->
+                <div class="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
+                    <div class="text-center mb-4">
+                        <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <i class="fas fa-tv text-3xl text-green-600"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-800">주가 현황판</h2>
+                    </div>
+                    <p class="text-gray-600 text-center mb-4 text-sm">
+                        실시간 주가와 뉴스 속보
+                    </p>
+                    <a href="/board" class="block w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg text-center transition duration-200">
+                        보기
+                    </a>
+                </div>
+                
+                <!-- 주식 투자 하는 법 메뉴 -->
+                <div class="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
+                    <div class="text-center mb-4">
+                        <div class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <i class="fas fa-book text-3xl text-orange-600"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-800">투자 가이드</h2>
+                    </div>
+                    <p class="text-gray-600 text-center mb-4 text-sm">
+                        거래 시간 및 이용 방법
+                    </p>
+                    <a href="/guide" class="block w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-lg text-center transition duration-200">
+                        보기
+                    </a>
+                </div>
+                
+                <!-- 학생 메뉴 -->
+                <div class="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
+                    <div class="text-center mb-4">
+                        <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <i class="fas fa-user-graduate text-3xl text-blue-600"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-800">학생</h2>
+                    </div>
+                    <p class="text-gray-600 text-center mb-4 text-sm">
                         주식을 거래하고 투자 실력을 키워보세요
                     </p>
-                    <a href="/student" class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-center transition duration-200">
+                    <a href="/student" class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg text-center transition duration-200">
                         입장하기
                     </a>
                 </div>
                 
                 <!-- 관리자 메뉴 -->
-                <div class="bg-white rounded-2xl shadow-xl p-8 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
-                    <div class="text-center mb-6">
-                        <div class="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <i class="fas fa-user-shield text-4xl text-purple-600"></i>
+                <div class="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
+                    <div class="text-center mb-4">
+                        <div class="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <i class="fas fa-user-shield text-3xl text-purple-600"></i>
                         </div>
-                        <h2 class="text-3xl font-bold text-gray-800">관리자</h2>
+                        <h2 class="text-2xl font-bold text-gray-800">관리자</h2>
                     </div>
-                    <p class="text-gray-600 text-center mb-6">
+                    <p class="text-gray-600 text-center mb-4 text-sm">
                         주가 조정 및 뉴스 관리
                     </p>
-                    <a href="/admin" class="block w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg text-center transition duration-200">
+                    <a href="/admin" class="block w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg text-center transition duration-200">
                         입장하기
                     </a>
                 </div>
@@ -565,6 +1095,7 @@ app.get('/student', (c) => {
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
         <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     </head>
     <body class="bg-gray-100">
         <!-- 로그인 화면 -->
@@ -575,9 +1106,10 @@ app.get('/student', (c) => {
                 </h2>
                 <p class="text-center text-gray-600 mb-6">
                     학번 또는 교사 아이디로 로그인하세요<br/>
-                    학생: 10101 (1학년 1반 1번) ~ 20130 (2학년 1반 30번)<br/>
+                    1학년: 10101~10130 (1반), 10201~10230 (2반) ... 11201~11230 (12반)<br/>
+                    2학년: 20101~20130 (1반), 20201~20230 (2반) ... 21301~21330 (13반)<br/>
                     교사: t001 ~ t090<br/>
-                    초기 비밀번호: 1111
+                    초기 비밀번호: 1111 (최초 로그인 후 변경 필요)
                 </p>
                 <div class="space-y-4">
                     <div>
@@ -788,7 +1320,21 @@ app.get('/admin', (c) => {
             <div class="container mx-auto px-4 py-6">
                 <!-- 주가 관리 탭 -->
                 <div id="stocksTab" class="tab-content">
-                    <h2 class="text-2xl font-bold mb-6">주가 관리</h2>
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold mb-3">주가 관리</h2>
+                        <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
+                            <div class="flex items-start">
+                                <i class="fas fa-info-circle text-blue-500 text-xl mr-3 mt-1"></i>
+                                <div>
+                                    <p class="font-semibold text-blue-900 mb-1">관리자는 24시간 언제든지 주가를 변경할 수 있습니다</p>
+                                    <ul class="text-sm text-blue-800 space-y-1">
+                                        <li><i class="fas fa-check text-green-600 mr-1"></i><strong>거래 시간 중 (08:00-16:00)</strong>: 변경 즉시 모든 사용자에게 실시간 반영</li>
+                                        <li><i class="fas fa-clock text-yellow-600 mr-1"></i><strong>거래 시간 외</strong>: 예약 저장 → 다음 거래 시간에 자동 반영</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div id="stocksList" class="grid md:grid-cols-2 gap-6"></div>
                 </div>
 
@@ -849,6 +1395,271 @@ app.get('/admin', (c) => {
         </div>
 
         <script src="/static/admin.js"></script>
+    </body>
+    </html>
+  `)
+})
+
+// ==================== 주가 현황판 페이지 ====================
+
+app.get('/board', (c) => {
+  return c.html(`
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>주가 현황판 - 충암고 가상 주식 투자</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+        <style>
+            @keyframes scroll-left {
+                0% { transform: translateX(100%); }
+                100% { transform: translateX(-100%); }
+            }
+            .news-ticker {
+                animation: scroll-left 30s linear infinite;
+            }
+        </style>
+    </head>
+    <body class="bg-gray-900 text-white">
+        <!-- 헤더 -->
+        <div class="bg-indigo-900 py-3 shadow-lg">
+            <div class="container mx-auto px-4 flex justify-between items-center">
+                <h1 class="text-2xl font-bold">
+                    <i class="fas fa-tv mr-2"></i>주가 현황판
+                </h1>
+                <a href="/" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">
+                    <i class="fas fa-home mr-1"></i>메인으로
+                </a>
+            </div>
+        </div>
+
+        <!-- 주가 현황 -->
+        <div class="container mx-auto px-4 py-6">
+            <div class="bg-gray-800 rounded-lg p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-bold text-green-400">
+                        <i class="fas fa-chart-line mr-2"></i>실시간 주가
+                    </h2>
+                    <div class="flex items-center space-x-4">
+                        <div class="text-sm text-yellow-400 bg-gray-700 px-4 py-2 rounded-lg">
+                            <i class="fas fa-clock mr-2"></i>
+                            <span id="priceUpdateCountdown">계산 중...</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="stocksBoard" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
+            </div>
+        </div>
+
+        <!-- 뉴스 티커 (하단 고정) -->
+        <div class="fixed bottom-0 left-0 right-0 bg-red-600 py-3 overflow-hidden">
+            <div class="news-ticker whitespace-nowrap">
+                <span id="newsTicker" class="text-lg font-semibold"></span>
+            </div>
+        </div>
+
+        <script src="/static/board.js"></script>
+    </body>
+    </html>
+  `)
+})
+
+// ==================== 투자 가이드 페이지 ====================
+
+app.get('/guide', (c) => {
+  return c.html(`
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>주식 투자 하는 법 - 충암고 가상 주식 투자</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    </head>
+    <body class="bg-gradient-to-br from-orange-50 to-yellow-100 min-h-screen">
+        <div class="container mx-auto px-4 py-8">
+            <!-- 헤더 -->
+            <div class="text-center mb-8">
+                <h1 class="text-4xl font-bold text-orange-900 mb-4">
+                    <i class="fas fa-book mr-3"></i>주식 투자 하는 법
+                </h1>
+                <a href="/" class="inline-block bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg">
+                    <i class="fas fa-arrow-left mr-2"></i>메인으로 돌아가기
+                </a>
+            </div>
+
+            <!-- 베타 테스트 공지 -->
+            <div class="max-w-4xl mx-auto mb-6">
+                <div class="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-2xl shadow-xl p-6 border-4 border-yellow-500">
+                    <div class="bg-white bg-opacity-95 rounded-xl p-6">
+                        <h2 class="text-2xl font-bold text-center mb-4 text-orange-900">
+                            <i class="fas fa-bullhorn mr-2"></i>🎉 베타 테스트 기간 🎉
+                        </h2>
+                        <div class="space-y-3">
+                            <div class="bg-yellow-50 rounded-lg p-4 border-l-4 border-yellow-500">
+                                <p class="font-bold text-orange-900 mb-2">
+                                    <i class="fas fa-calendar-alt mr-2"></i>2024년 11월 16일 (토) 오후 20:00 까지
+                                </p>
+                                <ul class="space-y-1 text-sm text-gray-800">
+                                    <li>✅ <strong>24시간 거래 가능</strong> - 아래 시간 제한 없이 언제든지 거래 가능</li>
+                                    <li>✅ <strong>실시간 주가 반영</strong> - 관리자 주가 변경 즉시 반영</li>
+                                    <li>⚠️ 11월 16일 20:00 이후부터 아래 정식 거래 시간 적용</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 안내사항 -->
+            <div class="max-w-4xl mx-auto space-y-6">
+                <!-- 장 운영 시간 -->
+                <div class="bg-white rounded-2xl shadow-xl p-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-clock text-blue-600 mr-3"></i>
+                        장 운영 시간
+                    </h2>
+                    <div class="space-y-3 text-lg">
+                        <p class="flex items-start">
+                            <i class="fas fa-check-circle text-green-600 mr-3 mt-1"></i>
+                            <span><strong>장 시작:</strong> 오전 08:00 정각</span>
+                        </p>
+                        <p class="flex items-start">
+                            <i class="fas fa-check-circle text-red-600 mr-3 mt-1"></i>
+                            <span><strong>장 마감:</strong> 오후 04:00 정각</span>
+                        </p>
+                        <p class="flex items-start text-red-600 font-semibold">
+                            <i class="fas fa-exclamation-triangle mr-3 mt-1"></i>
+                            <span>장 시작/마감 시간 외에는 주식 거래가 불가능합니다</span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 거래 가능 시간 -->
+                <div class="bg-white rounded-2xl shadow-xl p-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-calendar-check text-green-600 mr-3"></i>
+                        거래 가능 시간
+                    </h2>
+                    <div class="bg-green-50 border-2 border-green-300 rounded-lg p-6 mb-4">
+                        <p class="text-lg font-semibold text-green-800 mb-3">
+                            주식 거래는 다음 시간에만 가능합니다:
+                        </p>
+                        <div class="grid md:grid-cols-2 gap-3 text-gray-700">
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오전 08:00 ~ 08:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오전 09:10 ~ 09:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오전 10:10 ~ 10:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오전 11:10 ~ 11:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오후 12:10 ~ 12:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오후 01:00 ~ 01:10
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오후 02:00 ~ 02:10
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-green-600 text-xs mr-2"></i>
+                                오후 03:00 ~ 03:10
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 주가 업데이트 시간 -->
+                <div class="bg-white rounded-2xl shadow-xl p-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-sync-alt text-blue-600 mr-3"></i>
+                        주가 업데이트 시간
+                    </h2>
+                    <div class="bg-blue-50 border-2 border-blue-300 rounded-lg p-6">
+                        <p class="text-lg font-semibold text-blue-800 mb-3">
+                            관리자가 설정한 주가는 거래 가능 시간과 동일한 시간에 업데이트됩니다:
+                        </p>
+                        <div class="grid md:grid-cols-2 gap-3 text-gray-700">
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오전 08:00 ~ 08:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오전 09:10 ~ 09:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오전 10:10 ~ 10:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오전 11:10 ~ 11:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오후 12:10 ~ 12:20
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오후 01:00 ~ 01:10
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오후 02:00 ~ 02:10
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-circle text-blue-600 text-xs mr-2"></i>
+                                오후 03:00 ~ 03:10
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 이용 안내 -->
+                <div class="bg-white rounded-2xl shadow-xl p-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-info-circle text-purple-600 mr-3"></i>
+                        이용 안내
+                    </h2>
+                    <div class="space-y-3 text-gray-700">
+                        <p class="flex items-start">
+                            <i class="fas fa-arrow-right text-purple-600 mr-3 mt-1"></i>
+                            <span>초기 자금은 <strong>100만원</strong>입니다</span>
+                        </p>
+                        <p class="flex items-start">
+                            <i class="fas fa-arrow-right text-purple-600 mr-3 mt-1"></i>
+                            <span>총 <strong>8개의 주식 종목</strong>에 투자할 수 있습니다</span>
+                        </p>
+                        <p class="flex items-start">
+                            <i class="fas fa-arrow-right text-purple-600 mr-3 mt-1"></i>
+                            <span>유료 뉴스를 구매하여 투자 정보를 얻을 수 있습니다</span>
+                        </p>
+                        <p class="flex items-start">
+                            <i class="fas fa-arrow-right text-purple-600 mr-3 mt-1"></i>
+                            <span>투자 랭킹은 총 자산(현금 + 주식 평가액) 기준입니다</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </body>
     </html>
   `)

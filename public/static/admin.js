@@ -3,6 +3,8 @@ let currentAdmin = null;
 let stocks = [];
 let news = [];
 let users = [];
+let tradingAllowed = false; // 주가 업데이트 가능 여부
+let isBetaPeriod = false; // 베타 테스트 기간 여부
 
 // 관리자 로그인
 async function adminLogin() {
@@ -42,10 +44,59 @@ function showMainScreen() {
 
 // 데이터 로드
 async function loadData() {
+    await checkTradingStatus();
+    await checkAndApplyPendingPrices();
     await loadStocks();
     await loadNews();
     await loadUsers();
     updateDisplay();
+}
+
+// 거래 시간에 예약된 주가 자동 적용
+async function checkAndApplyPendingPrices() {
+    try {
+        if (tradingAllowed) {
+            await axios.post('/api/apply-pending-prices');
+        }
+    } catch (error) {
+        // 에러 무시 (이미 적용되었거나 예약이 없을 수 있음)
+    }
+}
+
+async function checkTradingStatus() {
+    try {
+        const response = await axios.get('/api/trading-status');
+        tradingAllowed = response.data.allowed;
+        isBetaPeriod = response.data.isBeta || false;
+        updateTradingStatusDisplay();
+    } catch (error) {
+        console.error('거래 시간 확인 실패:', error);
+    }
+}
+
+function updateTradingStatusDisplay() {
+    const header = document.querySelector('.bg-purple-900');
+    let statusBadge = document.getElementById('tradingStatusBadge');
+    
+    if (!statusBadge) {
+        statusBadge = document.createElement('div');
+        statusBadge.id = 'tradingStatusBadge';
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold';
+        const h1 = header.querySelector('h1');
+        h1.appendChild(statusBadge);
+    }
+    
+    if (isBetaPeriod) {
+        // 베타 테스트 기간
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-gray-900 animate-pulse';
+        statusBadge.innerHTML = '<i class="fas fa-star mr-1"></i>베타 테스트 - 24시간 즉시 반영';
+    } else if (tradingAllowed) {
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-green-500 text-white';
+        statusBadge.innerHTML = '<i class="fas fa-check-circle mr-1"></i>즉시 반영';
+    } else {
+        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-yellow-500 text-white';
+        statusBadge.innerHTML = '<i class="fas fa-clock mr-1"></i>예약 반영';
+    }
 }
 
 async function loadStocks() {
@@ -86,21 +137,37 @@ function updateDisplay() {
 function displayStocks() {
     const stocksList = document.getElementById('stocksList');
     stocksList.innerHTML = stocks.map(stock => {
+        const hasPending = stock.pending_price !== null;
+        const pendingBadge = hasPending 
+            ? `<span class="ml-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded">예약: ${formatMoney(stock.pending_price)}</span>` 
+            : '';
+        
         return `
-            <div class="bg-white rounded-lg shadow-lg p-6">
-                <h3 class="text-xl font-bold mb-2">${stock.name}</h3>
+            <div class="bg-white rounded-lg shadow-lg p-6 ${hasPending ? 'border-2 border-yellow-500' : ''}">
+                <h3 class="text-xl font-bold mb-2">${stock.name}${pendingBadge}</h3>
                 <p class="text-gray-600 mb-2">종목코드: ${stock.code}</p>
                 <p class="text-3xl font-bold text-purple-600 mb-4">${formatMoney(stock.current_price)}</p>
                 <p class="text-sm text-gray-500 mb-4">마지막 업데이트: ${new Date(stock.updated_at).toLocaleString('ko-KR')}</p>
+                ${hasPending ? '<p class="text-sm text-yellow-600 font-semibold mb-2"><i class="fas fa-clock mr-1"></i>주가 변경이 예약되었습니다. 거래 시간에 자동 반영됩니다.</p>' : ''}
                 
                 <div class="space-y-2">
                     <label class="block text-gray-700 font-semibold">새로운 주가</label>
                     <div class="flex space-x-2">
-                        <input type="number" id="price-${stock.id}" class="flex-1 px-3 py-2 border rounded" value="${stock.current_price}">
-                        <button onclick="updateStockPrice(${stock.id})" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded font-semibold">
-                            변경
+                        <input type="number" id="price-${stock.id}" class="flex-1 px-3 py-2 border rounded" value="${hasPending ? stock.pending_price : stock.current_price}">
+                        <button onclick="updateStockPrice(${stock.id}, false)" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded font-semibold whitespace-nowrap">
+                            ${isBetaPeriod ? '⚡ 즉시 변경' : (tradingAllowed ? '✅ 즉시 변경' : '⏰ 예약')}
                         </button>
+                        ${!isBetaPeriod ? `
+                        <button onclick="updateStockPrice(${stock.id}, true)" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-semibold whitespace-nowrap">
+                            ⚡ 즉시 반영
+                        </button>
+                        ` : ''}
                     </div>
+                    <p class="text-xs ${isBetaPeriod ? 'text-yellow-600' : 'text-gray-600'}">
+                        ${isBetaPeriod 
+                            ? '<i class="fas fa-star mr-1"></i>베타 테스트 기간 - 24시간 즉시 반영됩니다' 
+                            : '<i class="fas fa-info-circle mr-1"></i><strong>일반 버튼:</strong> 거래 시간이면 즉시, 아니면 예약 | <strong class="text-red-600">⚡ 즉시 반영:</strong> 거래 시간 관계없이 즉시 반영'}
+                    </p>
                 </div>
             </div>
         `;
@@ -177,7 +244,7 @@ function displayUsers() {
 }
 
 // 주가 업데이트
-async function updateStockPrice(stockId) {
+async function updateStockPrice(stockId, forceApply = false) {
     const newPrice = parseFloat(document.getElementById(`price-${stockId}`).value);
     
     if (!newPrice || newPrice <= 0) {
@@ -187,17 +254,33 @@ async function updateStockPrice(stockId) {
 
     const stock = stocks.find(s => s.id === stockId);
     
-    if (!confirm(`${stock.name}의 주가를 ${formatMoney(newPrice)}로 변경하시겠습니까?`)) {
+    // 강제 반영 시 추가 확인
+    const confirmMessage = forceApply 
+        ? `⚡ ${stock.name}의 주가를 ${formatMoney(newPrice)}로 즉시 강제 반영하시겠습니까?\n\n거래 시간 관계없이 모든 사용자에게 즉시 반영됩니다.`
+        : `${stock.name}의 주가를 ${formatMoney(newPrice)}로 변경하시겠습니까?`;
+    
+    if (!confirm(confirmMessage)) {
         return;
     }
 
     try {
-        await axios.post(`/api/stocks/${stockId}/update-price`, {
+        const response = await axios.post(`/api/stocks/${stockId}/update-price`, {
             price: newPrice,
-            adminUsername: currentAdmin.username
+            adminUsername: currentAdmin.username,
+            forceApply: forceApply
         });
         
-        alert('주가가 업데이트되었습니다.');
+        // 응답에 따라 다른 메시지 표시
+        if (response.data.forced) {
+            alert('⚡ 주가가 강제로 즉시 반영되었습니다!\n거래 시간과 관계없이 모든 사용자에게 실시간으로 업데이트되었습니다.');
+        } else if (response.data.applied) {
+            alert('✅ 주가가 즉시 반영되었습니다!\n모든 사용자에게 실시간으로 업데이트됩니다.');
+        } else if (response.data.pending) {
+            alert('⏰ 주가 변경이 예약되었습니다!\n다음 거래 시간에 자동으로 반영됩니다.');
+        } else {
+            alert('주가가 업데이트되었습니다.');
+        }
+        
         await loadData();
     } catch (error) {
         alert(error.response?.data?.error || '주가 업데이트에 실패했습니다.');
@@ -305,5 +388,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (savedAdmin) {
         currentAdmin = JSON.parse(savedAdmin);
         showMainScreen();
+        
+        // 30초마다 거래 시간 상태 확인
+        setInterval(checkTradingStatus, 30000);
     }
 });
