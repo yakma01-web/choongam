@@ -230,11 +230,8 @@ function updateTradingStatusDisplay() {
         h1.appendChild(statusBadge);
     }
     
-    if (isBetaPeriod) {
-        // 베타 테스트 기간
-        statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-yellow-500 text-white animate-pulse';
-        statusBadge.innerHTML = '<i class="fas fa-star mr-1"></i>베타 테스트 - 24시간 거래 가능';
-    } else if (tradingAllowed) {
+    // 거래 상태만 표시 (베타 테스트 안내 제거)
+    if (tradingAllowed) {
         statusBadge.className = 'ml-4 px-4 py-1 rounded-full text-sm font-semibold bg-green-500 text-white';
         statusBadge.innerHTML = '<i class="fas fa-check-circle mr-1"></i>거래 가능';
     } else {
@@ -398,34 +395,75 @@ function displayRanking() {
     if (users.length === 0) {
         rankingList.innerHTML = '<p class="text-gray-500 text-center py-8">사용자가 없습니다.</p>';
     } else {
+        // 모바일: 카드 형식, 데스크톱: 테이블 형식
         rankingList.innerHTML = `
-            <table class="w-full">
-                <thead class="bg-gray-200">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-bold">순위</th>
-                        <th class="px-6 py-3 text-left font-bold">이름</th>
-                        <th class="px-6 py-3 text-right font-bold">현금</th>
-                        <th class="px-6 py-3 text-right font-bold">주식 가치</th>
-                        <th class="px-6 py-3 text-right font-bold">총 자산</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${users.map((user, index) => {
-                        const isMe = user.id === currentUser.id;
-                        const bgClass = isMe ? 'bg-blue-50 font-bold' : '';
-                        
-                        return `
-                            <tr class="${bgClass} border-b">
-                                <td class="px-6 py-4">${index + 1}</td>
-                                <td class="px-6 py-4">${user.name} ${isMe ? '(나)' : ''}</td>
-                                <td class="px-6 py-4 text-right">${formatMoney(user.cash)}</td>
-                                <td class="px-6 py-4 text-right">${formatMoney(user.stock_value)}</td>
-                                <td class="px-6 py-4 text-right">${formatMoney(user.total_assets)}</td>
-                            </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
+            <!-- 모바일 버전 (카드 형식) -->
+            <div class="block md:hidden space-y-3">
+                ${users.map((user, index) => {
+                    const isMe = user.id === currentUser.id;
+                    const borderClass = isMe ? 'border-2 border-blue-500' : 'border border-gray-200';
+                    const bgClass = isMe ? 'bg-blue-50' : 'bg-white';
+                    
+                    return `
+                        <div class="${bgClass} ${borderClass} rounded-lg p-4 shadow">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="flex items-center space-x-3">
+                                    <div class="text-2xl font-bold text-indigo-600">${index + 1}</div>
+                                    <div>
+                                        <div class="font-bold text-lg">${user.name}</div>
+                                        ${isMe ? '<span class="text-xs bg-blue-500 text-white px-2 py-0.5 rounded">나</span>' : ''}
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-xs text-gray-500">총 자산</div>
+                                    <div class="text-lg font-bold text-green-600">${formatMoney(user.total_assets)}</div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 pt-3 border-t">
+                                <div>
+                                    <div class="text-xs text-gray-500">현금</div>
+                                    <div class="font-semibold text-sm">${formatMoney(user.cash)}</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-gray-500">주식 가치</div>
+                                    <div class="font-semibold text-sm">${formatMoney(user.stock_value)}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+            
+            <!-- 데스크톱 버전 (테이블 형식) -->
+            <div class="hidden md:block overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-200">
+                        <tr>
+                            <th class="px-6 py-3 text-left font-bold">순위</th>
+                            <th class="px-6 py-3 text-left font-bold">이름</th>
+                            <th class="px-6 py-3 text-right font-bold">현금</th>
+                            <th class="px-6 py-3 text-right font-bold">주식 가치</th>
+                            <th class="px-6 py-3 text-right font-bold">총 자산</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${users.map((user, index) => {
+                            const isMe = user.id === currentUser.id;
+                            const bgClass = isMe ? 'bg-blue-50 font-bold' : '';
+                            
+                            return `
+                                <tr class="${bgClass} border-b hover:bg-gray-50">
+                                    <td class="px-6 py-4">${index + 1}</td>
+                                    <td class="px-6 py-4">${user.name} ${isMe ? '(나)' : ''}</td>
+                                    <td class="px-6 py-4 text-right">${formatMoney(user.cash)}</td>
+                                    <td class="px-6 py-4 text-right">${formatMoney(user.stock_value)}</td>
+                                    <td class="px-6 py-4 text-right">${formatMoney(user.total_assets)}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
         `;
     }
 }
