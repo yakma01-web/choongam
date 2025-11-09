@@ -973,51 +973,7 @@ app.get('/', (c) => {
                 <p class="text-xl text-gray-700">실전 같은 주식 투자 시뮬레이션</p>
             </div>
             
-            <!-- 베타 테스트 공지사항 -->
-            <div class="max-w-4xl mx-auto mb-8">
-                <div class="bg-gradient-to-r from-yellow-400 via-orange-400 to-red-400 rounded-2xl shadow-2xl p-6 border-4 border-yellow-500">
-                    <div class="bg-white bg-opacity-95 rounded-xl p-6">
-                        <h2 class="text-2xl font-bold text-center mb-4 text-orange-900">
-                            <i class="fas fa-bullhorn mr-2"></i>
-                            🎉 베타 테스트 기간 안내 🎉
-                        </h2>
-                        <div class="space-y-3 text-gray-800">
-                            <div class="flex items-start bg-yellow-50 rounded-lg p-3">
-                                <i class="fas fa-calendar-alt text-orange-600 text-xl mr-3 mt-1"></i>
-                                <div>
-                                    <p class="font-bold text-orange-900">테스트 기간</p>
-                                    <p class="text-sm">2025년 11월 16일 (일) 오후 20:00 KST 까지</p>
-                                </div>
-                            </div>
-                            
-                            <div class="flex items-start bg-green-50 rounded-lg p-3">
-                                <i class="fas fa-clock text-green-600 text-xl mr-3 mt-1"></i>
-                                <div>
-                                    <p class="font-bold text-green-900">베타 기간 특별 혜택</p>
-                                    <ul class="text-sm space-y-1 mt-1">
-                                        <li>✅ <strong>24시간 거래 가능</strong> - 언제든지 주식을 사고 팔 수 있습니다</li>
-                                        <li>✅ <strong>실시간 주가 반영</strong> - 관리자 주가 변경이 즉시 반영됩니다</li>
-                                        <li>✅ <strong>자유로운 테스트</strong> - 시스템을 충분히 경험해보세요</li>
-                                    </ul>
-                                </div>
-                            </div>
-                            
-                            <div class="flex items-start bg-blue-50 rounded-lg p-3">
-                                <i class="fas fa-info-circle text-blue-600 text-xl mr-3 mt-1"></i>
-                                <div>
-                                    <p class="font-bold text-blue-900">정식 운영 (11월 16일 20:00 이후)</p>
-                                    <ul class="text-sm space-y-1 mt-1">
-                                        <li>• 거래 시간 제한 적용 (08:00-16:00, 8개 시간대)</li>
-                                        <li>• 거래량 기반 자동 주가 변동 시스템 작동</li>
-                                        <li>• 관리자 주가 변경은 예약 후 거래 시간에 반영</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
+
             <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
                 <!-- 주가 현황판 메뉴 -->
                 <div class="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition duration-300 transform hover:-translate-y-2">
@@ -1176,44 +1132,55 @@ app.get('/student', (c) => {
         <!-- 메인 화면 -->
         <div id="mainScreen" class="hidden">
             <!-- 헤더 -->
-            <div class="bg-indigo-900 text-white py-4 shadow-lg">
-                <div class="container mx-auto px-4 flex justify-between items-center">
-                    <h1 class="text-2xl font-bold">
-                        <i class="fas fa-chart-line mr-2"></i>충암고 가상 주식 투자
-                    </h1>
-                    <div class="flex items-center space-x-6">
-                        <div>
-                            <span class="text-gray-300">현금:</span>
-                            <span id="userCash" class="text-xl font-bold ml-2">0원</span>
-                        </div>
-                        <div>
-                            <span class="text-gray-300">총 자산:</span>
-                            <span id="totalAssets" class="text-xl font-bold ml-2">0원</span>
-                        </div>
-                        <div>
-                            <span class="text-gray-300 mr-2" id="userName"></span>
-                            <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg text-sm">
-                                로그아웃
-                            </button>
+            <div class="bg-indigo-900 text-white py-3 shadow-lg">
+                <div class="container mx-auto px-4">
+                    <!-- 모바일: 세로 레이아웃, 데스크톱: 가로 레이아웃 -->
+                    <div class="flex flex-col md:flex-row md:justify-between md:items-center space-y-3 md:space-y-0">
+                        <!-- 타이틀 -->
+                        <h1 class="text-lg md:text-2xl font-bold">
+                            <i class="fas fa-chart-line mr-2"></i>충암고 가상 주식 투자
+                        </h1>
+                        
+                        <!-- 자산 정보 및 로그아웃 -->
+                        <div class="flex flex-col md:flex-row md:items-center space-y-2 md:space-y-0 md:space-x-6">
+                            <!-- 자산 정보 (모바일: 한 줄에 표시) -->
+                            <div class="flex items-center space-x-4 text-sm md:text-base">
+                                <div>
+                                    <span class="text-gray-300">현금:</span>
+                                    <span id="userCash" class="font-bold ml-1">0원</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-300">총 자산:</span>
+                                    <span id="totalAssets" class="font-bold ml-1">0원</span>
+                                </div>
+                            </div>
+                            
+                            <!-- 사용자 정보 및 로그아웃 -->
+                            <div class="flex items-center justify-between md:justify-start space-x-3">
+                                <span class="text-gray-300 text-sm md:text-base" id="userName"></span>
+                                <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-sm">
+                                    로그아웃
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
             <!-- 탭 메뉴 -->
-            <div class="bg-white shadow-md">
+            <div class="bg-white shadow-md overflow-x-auto">
                 <div class="container mx-auto px-4">
-                    <div class="flex space-x-1">
-                        <button onclick="showTab('stocks')" class="tab-btn px-6 py-3 font-semibold border-b-2 border-blue-600 text-blue-600">
+                    <div class="flex space-x-1 min-w-max">
+                        <button onclick="showTab('stocks')" class="tab-btn px-4 md:px-6 py-3 font-semibold border-b-2 border-blue-600 text-blue-600 text-sm md:text-base whitespace-nowrap">
                             주식 거래
                         </button>
-                        <button onclick="showTab('portfolio')" class="tab-btn px-6 py-3 font-semibold text-gray-600 hover:text-blue-600">
+                        <button onclick="showTab('portfolio')" class="tab-btn px-4 md:px-6 py-3 font-semibold text-gray-600 hover:text-blue-600 text-sm md:text-base whitespace-nowrap">
                             내 포트폴리오
                         </button>
-                        <button onclick="showTab('news')" class="tab-btn px-6 py-3 font-semibold text-gray-600 hover:text-blue-600">
+                        <button onclick="showTab('news')" class="tab-btn px-4 md:px-6 py-3 font-semibold text-gray-600 hover:text-blue-600 text-sm md:text-base whitespace-nowrap">
                             뉴스
                         </button>
-                        <button onclick="showTab('ranking')" class="tab-btn px-6 py-3 font-semibold text-gray-600 hover:text-blue-600">
+                        <button onclick="showTab('ranking')" class="tab-btn px-4 md:px-6 py-3 font-semibold text-gray-600 hover:text-blue-600 text-sm md:text-base whitespace-nowrap">
                             투자 랭킹
                         </button>
                     </div>
@@ -1504,29 +1471,6 @@ app.get('/guide', (c) => {
                 <a href="/" class="inline-block bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg">
                     <i class="fas fa-arrow-left mr-2"></i>메인으로 돌아가기
                 </a>
-            </div>
-
-            <!-- 베타 테스트 공지 -->
-            <div class="max-w-4xl mx-auto mb-6">
-                <div class="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-2xl shadow-xl p-6 border-4 border-yellow-500">
-                    <div class="bg-white bg-opacity-95 rounded-xl p-6">
-                        <h2 class="text-2xl font-bold text-center mb-4 text-orange-900">
-                            <i class="fas fa-bullhorn mr-2"></i>🎉 베타 테스트 기간 🎉
-                        </h2>
-                        <div class="space-y-3">
-                            <div class="bg-yellow-50 rounded-lg p-4 border-l-4 border-yellow-500">
-                                <p class="font-bold text-orange-900 mb-2">
-                                    <i class="fas fa-calendar-alt mr-2"></i>2025년 11월 16일 (일) 오후 20:00 KST 까지
-                                </p>
-                                <ul class="space-y-1 text-sm text-gray-800">
-                                    <li>✅ <strong>24시간 거래 가능</strong> - 아래 시간 제한 없이 언제든지 거래 가능</li>
-                                    <li>✅ <strong>실시간 주가 반영</strong> - 관리자 주가 변경 즉시 반영</li>
-                                    <li>⚠️ 2025년 11월 16일 20:00 KST 이후부터 아래 정식 거래 시간 적용</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- 안내사항 -->
