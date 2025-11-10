@@ -513,135 +513,145 @@ app.get('/api/users/:userId/stocks', async (c) => {
 
 // 주식 매수
 app.post('/api/transactions/buy', async (c) => {
-  const { userId, stockId, quantity } = await c.req.json()
-  
-  // 거래 시간 확인
-  const tradingStatus = isTradingTime()
-  if (!tradingStatus.allowed) {
-    return c.json({ error: tradingStatus.message }, 400)
-  }
-  
-  // 사용자 정보 조회
-  const user = await c.env.DB.prepare(
-    'SELECT cash FROM users WHERE id = ?'
-  ).bind(userId).first()
-  
-  if (!user) {
-    return c.json({ error: '사용자를 찾을 수 없습니다.' }, 404)
-  }
-  
-  // 주식 정보 조회
-  const stock = await c.env.DB.prepare(
-    'SELECT current_price FROM stocks WHERE id = ?'
-  ).bind(stockId).first()
-  
-  if (!stock) {
-    return c.json({ error: '주식을 찾을 수 없습니다.' }, 404)
-  }
-  
-  const totalAmount = stock.current_price * quantity
-  
-  // 잔액 확인
-  if (user.cash < totalAmount) {
-    return c.json({ error: '잔액이 부족합니다.' }, 400)
-  }
-  
-  // 트랜잭션 시작
-  // 1. 거래 내역 저장
-  await c.env.DB.prepare(
-    'INSERT INTO transactions (user_id, stock_id, type, quantity, price, total_amount) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(userId, stockId, 'BUY', quantity, stock.current_price, totalAmount).run()
-  
-  // 2. 사용자 잔액 차감
-  await c.env.DB.prepare(
-    'UPDATE users SET cash = cash - ? WHERE id = ?'
-  ).bind(totalAmount, userId).run()
-  
-  // 3. 보유 주식 업데이트
-  const existingStock = await c.env.DB.prepare(
-    'SELECT quantity, avg_price FROM user_stocks WHERE user_id = ? AND stock_id = ?'
-  ).bind(userId, stockId).first()
-  
-  if (existingStock) {
-    // 기존 보유 주식이 있는 경우 평균 매입가 계산
-    const totalQuantity = existingStock.quantity + quantity
-    const totalValue = (existingStock.avg_price * existingStock.quantity) + (stock.current_price * quantity)
-    const newAvgPrice = totalValue / totalQuantity
+  try {
+    const { userId, stockId, quantity } = await c.req.json()
     
+    // 거래 시간 확인
+    const tradingStatus = isTradingTime()
+    if (!tradingStatus.allowed) {
+      return c.json({ error: tradingStatus.message }, 400)
+    }
+    
+    // 사용자 정보 조회
+    const user = await c.env.DB.prepare(
+      'SELECT cash FROM users WHERE id = ?'
+    ).bind(userId).first()
+    
+    if (!user) {
+      return c.json({ error: '사용자를 찾을 수 없습니다.' }, 404)
+    }
+    
+    // 주식 정보 조회
+    const stock = await c.env.DB.prepare(
+      'SELECT current_price FROM stocks WHERE id = ?'
+    ).bind(stockId).first()
+    
+    if (!stock) {
+      return c.json({ error: '주식을 찾을 수 없습니다.' }, 404)
+    }
+    
+    const totalAmount = stock.current_price * quantity
+    
+    // 잔액 확인
+    if (user.cash < totalAmount) {
+      return c.json({ error: '잔액이 부족합니다.' }, 400)
+    }
+    
+    // 트랜잭션 시작
+    // 1. 거래 내역 저장
     await c.env.DB.prepare(
-      'UPDATE user_stocks SET quantity = ?, avg_price = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND stock_id = ?'
-    ).bind(totalQuantity, newAvgPrice, userId, stockId).run()
-  } else {
-    // 새로운 주식 보유
+      'INSERT INTO transactions (user_id, stock_id, type, quantity, price, total_amount) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(userId, stockId, 'BUY', quantity, stock.current_price, totalAmount).run()
+    
+    // 2. 사용자 잔액 차감
     await c.env.DB.prepare(
-      'INSERT INTO user_stocks (user_id, stock_id, quantity, avg_price) VALUES (?, ?, ?, ?)'
-    ).bind(userId, stockId, quantity, stock.current_price).run()
+      'UPDATE users SET cash = cash - ? WHERE id = ?'
+    ).bind(totalAmount, userId).run()
+    
+    // 3. 보유 주식 업데이트
+    const existingStock = await c.env.DB.prepare(
+      'SELECT quantity, avg_price FROM user_stocks WHERE user_id = ? AND stock_id = ?'
+    ).bind(userId, stockId).first()
+    
+    if (existingStock) {
+      // 기존 보유 주식이 있는 경우 평균 매입가 계산
+      const totalQuantity = existingStock.quantity + quantity
+      const totalValue = (existingStock.avg_price * existingStock.quantity) + (stock.current_price * quantity)
+      const newAvgPrice = totalValue / totalQuantity
+      
+      await c.env.DB.prepare(
+        'UPDATE user_stocks SET quantity = ?, avg_price = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND stock_id = ?'
+      ).bind(totalQuantity, newAvgPrice, userId, stockId).run()
+    } else {
+      // 새로운 주식 보유
+      await c.env.DB.prepare(
+        'INSERT INTO user_stocks (user_id, stock_id, quantity, avg_price) VALUES (?, ?, ?, ?)'
+      ).bind(userId, stockId, quantity, stock.current_price).run()
+    }
+    
+    // 4. 거래량 집계
+    await aggregateTradingVolume(c.env.DB, stockId, 'BUY', quantity)
+    
+    return c.json({ success: true, message: '매수가 완료되었습니다.' })
+  } catch (error) {
+    console.error('매수 오류:', error)
+    return c.json({ error: '거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }, 500)
   }
-  
-  // 4. 거래량 집계
-  await aggregateTradingVolume(c.env.DB, stockId, 'BUY', quantity)
-  
-  return c.json({ success: true, message: '매수가 완료되었습니다.' })
 })
 
 // 주식 매도
 app.post('/api/transactions/sell', async (c) => {
-  const { userId, stockId, quantity } = await c.req.json()
-  
-  // 거래 시간 확인
-  const tradingStatus = isTradingTime()
-  if (!tradingStatus.allowed) {
-    return c.json({ error: tradingStatus.message }, 400)
-  }
-  
-  // 보유 주식 확인
-  const userStock = await c.env.DB.prepare(
-    'SELECT quantity, avg_price FROM user_stocks WHERE user_id = ? AND stock_id = ?'
-  ).bind(userId, stockId).first()
-  
-  if (!userStock || userStock.quantity < quantity) {
-    return c.json({ error: '보유 수량이 부족합니다.' }, 400)
-  }
-  
-  // 주식 정보 조회
-  const stock = await c.env.DB.prepare(
-    'SELECT current_price FROM stocks WHERE id = ?'
-  ).bind(stockId).first()
-  
-  if (!stock) {
-    return c.json({ error: '주식을 찾을 수 없습니다.' }, 404)
-  }
-  
-  const totalAmount = stock.current_price * quantity
-  
-  // 트랜잭션 시작
-  // 1. 거래 내역 저장
-  await c.env.DB.prepare(
-    'INSERT INTO transactions (user_id, stock_id, type, quantity, price, total_amount) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(userId, stockId, 'SELL', quantity, stock.current_price, totalAmount).run()
-  
-  // 2. 사용자 잔액 증가
-  await c.env.DB.prepare(
-    'UPDATE users SET cash = cash + ? WHERE id = ?'
-  ).bind(totalAmount, userId).run()
-  
-  // 3. 보유 주식 업데이트
-  const newQuantity = userStock.quantity - quantity
-  if (newQuantity === 0) {
-    // 모두 매도한 경우 삭제
+  try {
+    const { userId, stockId, quantity } = await c.req.json()
+    
+    // 거래 시간 확인
+    const tradingStatus = isTradingTime()
+    if (!tradingStatus.allowed) {
+      return c.json({ error: tradingStatus.message }, 400)
+    }
+    
+    // 보유 주식 확인
+    const userStock = await c.env.DB.prepare(
+      'SELECT quantity, avg_price FROM user_stocks WHERE user_id = ? AND stock_id = ?'
+    ).bind(userId, stockId).first()
+    
+    if (!userStock || userStock.quantity < quantity) {
+      return c.json({ error: '보유 수량이 부족합니다.' }, 400)
+    }
+    
+    // 주식 정보 조회
+    const stock = await c.env.DB.prepare(
+      'SELECT current_price FROM stocks WHERE id = ?'
+    ).bind(stockId).first()
+    
+    if (!stock) {
+      return c.json({ error: '주식을 찾을 수 없습니다.' }, 404)
+    }
+    
+    const totalAmount = stock.current_price * quantity
+    
+    // 트랜잭션 시작
+    // 1. 거래 내역 저장
     await c.env.DB.prepare(
-      'DELETE FROM user_stocks WHERE user_id = ? AND stock_id = ?'
-    ).bind(userId, stockId).run()
-  } else {
+      'INSERT INTO transactions (user_id, stock_id, type, quantity, price, total_amount) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(userId, stockId, 'SELL', quantity, stock.current_price, totalAmount).run()
+    
+    // 2. 사용자 잔액 증가
     await c.env.DB.prepare(
-      'UPDATE user_stocks SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND stock_id = ?'
-    ).bind(newQuantity, userId, stockId).run()
+      'UPDATE users SET cash = cash + ? WHERE id = ?'
+    ).bind(totalAmount, userId).run()
+    
+    // 3. 보유 주식 업데이트
+    const newQuantity = userStock.quantity - quantity
+    if (newQuantity === 0) {
+      // 모두 매도한 경우 삭제
+      await c.env.DB.prepare(
+        'DELETE FROM user_stocks WHERE user_id = ? AND stock_id = ?'
+      ).bind(userId, stockId).run()
+    } else {
+      await c.env.DB.prepare(
+        'UPDATE user_stocks SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND stock_id = ?'
+      ).bind(newQuantity, userId, stockId).run()
+    }
+    
+    // 4. 거래량 집계
+    await aggregateTradingVolume(c.env.DB, stockId, 'SELL', quantity)
+    
+    return c.json({ success: true, message: '매도가 완료되었습니다.' })
+  } catch (error) {
+    console.error('매도 오류:', error)
+    return c.json({ error: '거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }, 500)
   }
-  
-  // 4. 거래량 집계
-  await aggregateTradingVolume(c.env.DB, stockId, 'SELL', quantity)
-  
-  return c.json({ success: true, message: '매도가 완료되었습니다.' })
 })
 
 // 거래 내역 조회
@@ -910,6 +920,12 @@ app.delete('/api/news/:newsId', async (c) => {
     return c.json({ error: '권한이 없습니다.' }, 403)
   }
   
+  // 뉴스 구매 기록 먼저 삭제 (외래 키 제약 조건 대응)
+  await c.env.DB.prepare(
+    'DELETE FROM news_views WHERE news_id = ?'
+  ).bind(newsId).run()
+  
+  // 뉴스 삭제
   await c.env.DB.prepare(
     'DELETE FROM news WHERE id = ?'
   ).bind(newsId).run()
