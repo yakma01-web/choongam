@@ -95,125 +95,153 @@ function getCurrentTimeWindow(): string {
 
 // 거래량 집계 및 저장 함수
 async function aggregateTradingVolume(db: D1Database, stockId: number, type: 'BUY' | 'SELL', quantity: number) {
-  const timeWindow = getCurrentTimeWindow()
-  
-  // 현재 주가 조회
-  const stock = await db.prepare(
-    'SELECT current_price FROM stocks WHERE id = ?'
-  ).bind(stockId).first()
-  
-  if (!stock) return
-  
-  // 거래량 집계 레코드 확인
-  const existing = await db.prepare(
-    'SELECT * FROM trading_volume WHERE stock_id = ? AND time_window = ?'
-  ).bind(stockId, timeWindow).first()
-  
-  if (existing) {
-    // 기존 레코드 업데이트
-    if (type === 'BUY') {
-      await db.prepare(`
-        UPDATE trading_volume 
-        SET buy_volume = buy_volume + ?, 
-            net_volume = (buy_volume + ?) - sell_volume
-        WHERE stock_id = ? AND time_window = ?
-      `).bind(quantity, quantity, stockId, timeWindow).run()
-    } else {
-      await db.prepare(`
-        UPDATE trading_volume 
-        SET sell_volume = sell_volume + ?, 
-            net_volume = buy_volume - (sell_volume + ?)
-        WHERE stock_id = ? AND time_window = ?
-      `).bind(quantity, quantity, stockId, timeWindow).run()
-    }
-  } else {
-    // 새 레코드 생성
-    const buyVolume = type === 'BUY' ? quantity : 0
-    const sellVolume = type === 'SELL' ? quantity : 0
-    const netVolume = buyVolume - sellVolume
+  try {
+    const timeWindow = getCurrentTimeWindow()
     
-    await db.prepare(`
-      INSERT INTO trading_volume 
-      (stock_id, time_window, buy_volume, sell_volume, net_volume, price_before)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(stockId, timeWindow, buyVolume, sellVolume, netVolume, stock.current_price).run()
+    // 현재 주가 조회 (Foreign Key 체크)
+    const stock = await db.prepare(
+      'SELECT current_price FROM stocks WHERE id = ?'
+    ).bind(stockId).first()
+    
+    if (!stock) {
+      console.error(`[aggregateTradingVolume] Stock not found: stockId=${stockId}`)
+      return
+    }
+    
+    // 거래량 집계 레코드 확인
+    const existing = await db.prepare(
+      'SELECT * FROM trading_volume WHERE stock_id = ? AND time_window = ?'
+    ).bind(stockId, timeWindow).first()
+    
+    if (existing) {
+      // 기존 레코드 업데이트
+      if (type === 'BUY') {
+        await db.prepare(`
+          UPDATE trading_volume 
+          SET buy_volume = buy_volume + ?, 
+              net_volume = (buy_volume + ?) - sell_volume
+          WHERE stock_id = ? AND time_window = ?
+        `).bind(quantity, quantity, stockId, timeWindow).run()
+      } else {
+        await db.prepare(`
+          UPDATE trading_volume 
+          SET sell_volume = sell_volume + ?, 
+              net_volume = buy_volume - (sell_volume + ?)
+          WHERE stock_id = ? AND time_window = ?
+        `).bind(quantity, quantity, stockId, timeWindow).run()
+      }
+    } else {
+      // 새 레코드 생성
+      const buyVolume = type === 'BUY' ? quantity : 0
+      const sellVolume = type === 'SELL' ? quantity : 0
+      const netVolume = buyVolume - sellVolume
+      
+      await db.prepare(`
+        INSERT INTO trading_volume 
+        (stock_id, time_window, buy_volume, sell_volume, net_volume, price_before)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(stockId, timeWindow, buyVolume, sellVolume, netVolume, stock.current_price).run()
+    }
+  } catch (error) {
+    console.error('[aggregateTradingVolume] Error:', error, `stockId=${stockId}, type=${type}, quantity=${quantity}`)
+    // 에러가 발생해도 거래는 완료되도록 함 (거래량 집계는 부수적 기능)
   }
 }
 
 // 주가 자동 업데이트 함수 (거래량 기반)
 async function updateStockPrices(db: D1Database) {
-  const timeWindow = getCurrentTimeWindow()
-  
-  // 미적용 거래량 데이터 조회
-  const volumes = await db.prepare(`
-    SELECT tv.*, s.current_price, s.code, s.name,
-           COALESCE(pis.impact_rate, 0.01) as impact_rate,
-           COALESCE(pis.max_change_rate, 0.05) as max_change_rate,
-           COALESCE(pis.min_volume, 10) as min_volume
-    FROM trading_volume tv
-    JOIN stocks s ON tv.stock_id = s.id
-    LEFT JOIN price_impact_settings pis ON tv.stock_id = pis.stock_id
-    WHERE tv.time_window = ? AND tv.applied_at IS NULL
-  `).bind(timeWindow).all()
-  
-  if (!volumes.results || volumes.results.length === 0) {
-    return { updated: 0, message: '업데이트할 거래량 데이터가 없습니다.' }
-  }
-  
-  let updatedCount = 0
-  
-  for (const vol of volumes.results) {
-    // 최소 거래량 체크
-    const totalVolume = vol.buy_volume + vol.sell_volume
-    if (totalVolume < vol.min_volume) {
-      // 거래량이 너무 적으면 주가 미반영
-      await db.prepare(`
-        UPDATE trading_volume 
-        SET applied_at = CURRENT_TIMESTAMP, price_after = price_before
-        WHERE id = ?
-      `).bind(vol.id).run()
-      continue
+  try {
+    const timeWindow = getCurrentTimeWindow()
+    
+    // 미적용 거래량 데이터 조회
+    const volumes = await db.prepare(`
+      SELECT tv.*, s.current_price, s.code, s.name,
+             COALESCE(pis.impact_rate, 0.01) as impact_rate,
+             COALESCE(pis.max_change_rate, 0.05) as max_change_rate,
+             COALESCE(pis.min_volume, 10) as min_volume
+      FROM trading_volume tv
+      JOIN stocks s ON tv.stock_id = s.id
+      LEFT JOIN price_impact_settings pis ON tv.stock_id = pis.stock_id
+      WHERE tv.time_window = ? AND tv.applied_at IS NULL
+    `).bind(timeWindow).all()
+    
+    if (!volumes.results || volumes.results.length === 0) {
+      return { updated: 0, message: '업데이트할 거래량 데이터가 없습니다.' }
     }
     
-    // 주가 변동 계산
-    // 순 거래량(net_volume)에 따라 가격 변동
-    // 양수면 매수 우세 -> 가격 상승, 음수면 매도 우세 -> 가격 하락
-    const priceChangeRate = (vol.net_volume / 100) * vol.impact_rate
+    let updatedCount = 0
     
-    // 최대 변동률 제한
-    const limitedChangeRate = Math.max(
-      -vol.max_change_rate,
-      Math.min(vol.max_change_rate, priceChangeRate)
-    )
+    for (const vol of volumes.results) {
+      try {
+        // Foreign Key 체크: 주식이 존재하는지 확인
+        const stockExists = await db.prepare(
+          'SELECT id FROM stocks WHERE id = ?'
+        ).bind(vol.stock_id).first()
+        
+        if (!stockExists) {
+          console.error(`[updateStockPrices] Stock not found: stockId=${vol.stock_id}`)
+          continue
+        }
+        
+        // 최소 거래량 체크
+        const totalVolume = vol.buy_volume + vol.sell_volume
+        if (totalVolume < vol.min_volume) {
+          // 거래량이 너무 적으면 주가 미반영
+          await db.prepare(`
+            UPDATE trading_volume 
+            SET applied_at = CURRENT_TIMESTAMP, price_after = price_before
+            WHERE id = ?
+          `).bind(vol.id).run()
+          continue
+        }
+        
+        // 주가 변동 계산
+        // 순 거래량(net_volume)에 따라 가격 변동
+        // 양수면 매수 우세 -> 가격 상승, 음수면 매도 우세 -> 가격 하락
+        const priceChangeRate = (vol.net_volume / 100) * vol.impact_rate
+        
+        // 최대 변동률 제한
+        const limitedChangeRate = Math.max(
+          -vol.max_change_rate,
+          Math.min(vol.max_change_rate, priceChangeRate)
+        )
+        
+        const newPrice = Math.round(vol.current_price * (1 + limitedChangeRate))
+        
+        // 주가 업데이트
+        await db.prepare(`
+          UPDATE stocks 
+          SET current_price = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newPrice, vol.stock_id).run()
+        
+        // 가격 변동 이력 저장
+        await db.prepare(`
+          INSERT INTO price_history (stock_id, price, changed_by)
+          VALUES (?, ?, ?)
+        `).bind(vol.stock_id, newPrice, 'AUTO_UPDATE').run()
+        
+        // 거래량 데이터 업데이트
+        await db.prepare(`
+          UPDATE trading_volume 
+          SET price_after = ?, applied_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newPrice, vol.id).run()
+        
+        updatedCount++
+      } catch (error) {
+        console.error(`[updateStockPrices] Error updating stock ${vol.stock_id}:`, error)
+        // 개별 주식 업데이트 실패해도 다른 주식은 계속 처리
+      }
+    }
     
-    const newPrice = Math.round(vol.current_price * (1 + limitedChangeRate))
-    
-    // 주가 업데이트
-    await db.prepare(`
-      UPDATE stocks 
-      SET current_price = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(newPrice, vol.stock_id).run()
-    
-    // 가격 변동 이력 저장
-    await db.prepare(`
-      INSERT INTO price_history (stock_id, price, changed_by)
-      VALUES (?, ?, ?)
-    `).bind(vol.stock_id, newPrice, 'AUTO_UPDATE').run()
-    
-    // 거래량 데이터 업데이트
-    await db.prepare(`
-      UPDATE trading_volume 
-      SET price_after = ?, applied_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(newPrice, vol.id).run()
-    
-    updatedCount++
-  }
-  
-  return { 
-    updated: updatedCount, 
-    message: `${updatedCount}개 종목의 주가가 업데이트되었습니다.` 
+    return { 
+      updated: updatedCount, 
+      message: `${updatedCount}개 종목의 주가가 업데이트되었습니다.` 
+    }
+  } catch (error) {
+    console.error('[updateStockPrices] Fatal error:', error)
+    return { updated: 0, message: '주가 업데이트 중 오류가 발생했습니다.', error: String(error) }
   }
 }
 
@@ -368,71 +396,85 @@ app.get('/api/stocks/:id', async (c) => {
 
 // 주가 업데이트 (관리자 전용 - 24시간 가능, 거래 시간에 자동 반영)
 app.post('/api/stocks/:id/update-price', async (c) => {
-  const stockId = c.req.param('id')
-  const { price, adminUsername, forceApply } = await c.req.json()
-  
-  // 관리자 인증 확인
-  const admin = await c.env.DB.prepare(
-    'SELECT id FROM admins WHERE username = ?'
-  ).bind(adminUsername).first()
-  
-  if (!admin) {
-    return c.json({ error: '권한이 없습니다.' }, 403)
-  }
-  
-  // 거래 시간 확인
-  const tradingStatus = isTradingTime()
-  
-  // 강제 즉시 반영 또는 거래 시간이면 즉시 반영
-  if (forceApply || tradingStatus.allowed) {
-    // 즉시 반영
-    await c.env.DB.prepare(
-      'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-    ).bind(price, stockId).run()
+  try {
+    const stockId = c.req.param('id')
+    const { price, adminUsername, forceApply } = await c.req.json()
     
-    // 주가 변동 이력 저장
-    const changeNote = forceApply ? `${adminUsername} (강제 반영)` : adminUsername
-    await c.env.DB.prepare(
-      'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
-    ).bind(stockId, price, changeNote).run()
+    // 관리자 인증 확인
+    const admin = await c.env.DB.prepare(
+      'SELECT id FROM admins WHERE username = ?'
+    ).bind(adminUsername).first()
     
-    // 기존 예약이 있으면 삭제
-    await c.env.DB.prepare(
-      'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
-    ).bind(stockId, 'pending').run()
+    if (!admin) {
+      return c.json({ error: '권한이 없습니다.' }, 403)
+    }
     
-    const stock = await c.env.DB.prepare(
-      'SELECT * FROM stocks WHERE id = ?'
+    // Foreign Key 체크: 주식이 존재하는지 확인
+    const stockExists = await c.env.DB.prepare(
+      'SELECT id FROM stocks WHERE id = ?'
     ).bind(stockId).first()
     
-    return c.json({ 
-      stock, 
-      message: forceApply ? '주가가 강제로 즉시 반영되었습니다.' : '주가가 즉시 반영되었습니다.',
-      applied: true,
-      forced: forceApply || false
-    })
-  } else {
-    // 거래 시간이 아니면 예약으로 저장
-    // 기존 대기 중인 업데이트가 있으면 삭제
-    await c.env.DB.prepare(
-      'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
-    ).bind(stockId, 'pending').run()
+    if (!stockExists) {
+      return c.json({ error: '주식을 찾을 수 없습니다.' }, 404)
+    }
     
-    // 새로운 예약 추가
-    await c.env.DB.prepare(
-      'INSERT INTO pending_price_updates (stock_id, new_price, changed_by) VALUES (?, ?, ?)'
-    ).bind(stockId, price, adminUsername).run()
+    // 거래 시간 확인
+    const tradingStatus = isTradingTime()
     
-    const stock = await c.env.DB.prepare(
-      'SELECT * FROM stocks WHERE id = ?'
-    ).bind(stockId).first()
-    
-    return c.json({ 
-      stock: { ...stock, pending_price: price },
-      message: '주가 변경이 예약되었습니다. 다음 거래 시간에 자동으로 반영됩니다.',
-      applied: false,
-      pending: true
-    })
+    // 강제 즉시 반영 또는 거래 시간이면 즉시 반영
+    if (forceApply || tradingStatus.allowed) {
+      // 즉시 반영
+      await c.env.DB.prepare(
+        'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      ).bind(price, stockId).run()
+      
+      // 주가 변동 이력 저장
+      const changeNote = forceApply ? `${adminUsername} (강제 반영)` : adminUsername
+      await c.env.DB.prepare(
+        'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
+      ).bind(stockId, price, changeNote).run()
+      
+      // 기존 예약이 있으면 삭제
+      await c.env.DB.prepare(
+        'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
+      ).bind(stockId, 'pending').run()
+      
+      const stock = await c.env.DB.prepare(
+        'SELECT * FROM stocks WHERE id = ?'
+      ).bind(stockId).first()
+      
+      return c.json({ 
+        stock, 
+        message: forceApply ? '주가가 강제로 즉시 반영되었습니다.' : '주가가 즉시 반영되었습니다.',
+        applied: true,
+        forced: forceApply || false
+      })
+    } else {
+      // 거래 시간이 아니면 예약으로 저장
+      // 기존 대기 중인 업데이트가 있으면 삭제
+      await c.env.DB.prepare(
+        'DELETE FROM pending_price_updates WHERE stock_id = ? AND status = ?'
+      ).bind(stockId, 'pending').run()
+      
+      // 새로운 예약 추가
+      await c.env.DB.prepare(
+        'INSERT INTO pending_price_updates (stock_id, new_price, changed_by) VALUES (?, ?, ?)'
+      ).bind(stockId, price, adminUsername).run()
+      
+      const stock = await c.env.DB.prepare(
+        'SELECT * FROM stocks WHERE id = ?'
+      ).bind(stockId).first()
+      
+      return c.json({ 
+        stock: { ...stock, pending_price: price },
+        message: '주가 변경이 예약되었습니다. 다음 거래 시간에 자동으로 반영됩니다.',
+        applied: false,
+        pending: true
+      })
+    }
+  } catch (error) {
+    console.error('[update-price] Error:', error)
+    return c.json({ error: '주가 변경 중 오류가 발생했습니다.' }, 500)
   }
 })
 
@@ -451,44 +493,68 @@ app.get('/api/pending-price-updates', async (c) => {
 
 // 예약된 주가 변경 적용 (거래 시간에 자동 호출)
 app.post('/api/apply-pending-prices', async (c) => {
-  // 거래 시간 확인
-  const tradingStatus = isTradingTime()
-  if (!tradingStatus.allowed) {
-    return c.json({ error: '거래 시간이 아닙니다.' }, 400)
+  try {
+    // 거래 시간 확인
+    const tradingStatus = isTradingTime()
+    if (!tradingStatus.allowed) {
+      return c.json({ error: '거래 시간이 아닙니다.' }, 400)
+    }
+    
+    // 모든 대기 중인 주가 변경 가져오기
+    const pending = await c.env.DB.prepare(
+      'SELECT * FROM pending_price_updates WHERE status = ? ORDER BY created_at ASC'
+    ).bind('pending').all()
+    
+    let appliedCount = 0
+    
+    // 각 주가 변경 적용
+    for (const update of pending.results) {
+      try {
+        // Foreign Key 체크: 주식이 존재하는지 확인
+        const stockExists = await c.env.DB.prepare(
+          'SELECT id FROM stocks WHERE id = ?'
+        ).bind(update.stock_id).first()
+        
+        if (!stockExists) {
+          console.error(`[apply-pending-prices] Stock not found: stockId=${update.stock_id}`)
+          // 주식이 없으면 예약을 실패로 표시
+          await c.env.DB.prepare(
+            'UPDATE pending_price_updates SET status = ? WHERE id = ?'
+          ).bind('failed', update.id).run()
+          continue
+        }
+        
+        // 주가 업데이트
+        await c.env.DB.prepare(
+          'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+        ).bind(update.new_price, update.stock_id).run()
+        
+        // 주가 변동 이력 저장
+        await c.env.DB.prepare(
+          'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
+        ).bind(update.stock_id, update.new_price, update.changed_by).run()
+        
+        // 예약 상태 업데이트
+        await c.env.DB.prepare(
+          'UPDATE pending_price_updates SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?'
+        ).bind('applied', update.id).run()
+        
+        appliedCount++
+      } catch (error) {
+        console.error(`[apply-pending-prices] Error applying update ${update.id}:`, error)
+        // 개별 업데이트 실패해도 다른 업데이트는 계속 처리
+      }
+    }
+    
+    return c.json({ 
+      success: true, 
+      message: `${appliedCount}개의 주가 변경이 적용되었습니다.`,
+      appliedCount 
+    })
+  } catch (error) {
+    console.error('[apply-pending-prices] Fatal error:', error)
+    return c.json({ error: '예약된 주가 변경 적용 중 오류가 발생했습니다.' }, 500)
   }
-  
-  // 모든 대기 중인 주가 변경 가져오기
-  const pending = await c.env.DB.prepare(
-    'SELECT * FROM pending_price_updates WHERE status = ? ORDER BY created_at ASC'
-  ).bind('pending').all()
-  
-  let appliedCount = 0
-  
-  // 각 주가 변경 적용
-  for (const update of pending.results) {
-    // 주가 업데이트
-    await c.env.DB.prepare(
-      'UPDATE stocks SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-    ).bind(update.new_price, update.stock_id).run()
-    
-    // 주가 변동 이력 저장
-    await c.env.DB.prepare(
-      'INSERT INTO price_history (stock_id, price, changed_by) VALUES (?, ?, ?)'
-    ).bind(update.stock_id, update.new_price, update.changed_by).run()
-    
-    // 예약 상태 업데이트
-    await c.env.DB.prepare(
-      'UPDATE pending_price_updates SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?'
-    ).bind('applied', update.id).run()
-    
-    appliedCount++
-  }
-  
-  return c.json({ 
-    success: true, 
-    message: `${appliedCount}개의 주가 변경이 적용되었습니다.`,
-    appliedCount 
-  })
 })
 
 // ==================== 사용자 주식 보유 API ====================
