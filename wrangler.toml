@@ -1,0 +1,9 @@
+name = "choongam"
+compatibility_date = "2025-11-06"
+pages_build_output_dir = "dist"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "choongam-production"
+database_id = "7578ad60-7e0e-4603-a29c-656e5833cba3"
