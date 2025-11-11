@@ -13,11 +13,11 @@ module.exports = {
       exec_mode: 'fork',
       // 자동 재시작 설정
       autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s',
-      restart_delay: 4000,
-      // 메모리 제한 (500MB 초과 시 재시작)
-      max_memory_restart: '500M',
+      max_restarts: 50,  // 무제한에 가깝게
+      min_uptime: '5s',
+      restart_delay: 2000,
+      // 메모리 제한 (300MB 초과 시 재시작)
+      max_memory_restart: '300M',
       // 에러 로그 관리
       error_file: '/home/user/.pm2/logs/webapp-error.log',
       out_file: '/home/user/.pm2/logs/webapp-out.log',
@@ -25,8 +25,14 @@ module.exports = {
       // 크래시 시 자동 재시작
       exp_backoff_restart_delay: 100,
       // 시간 초과 설정
-      kill_timeout: 5000,
-      listen_timeout: 10000
+      kill_timeout: 3000,
+      listen_timeout: 8000
+    },
+    {
+      name: 'watchdog',
+      script: '/home/user/webapp/watchdog.sh',
+      autorestart: true,
+      watch: false
     }
   ]
 }
