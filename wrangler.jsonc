@@ -9,8 +9,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "webapp-production",
-      "database_id": "local-only"
+      "database_name": "choongam-production",
+      "database_id": "7578ad60-7e0e-4603-a29c-656e5833cba3"
     }
   ]
 }
